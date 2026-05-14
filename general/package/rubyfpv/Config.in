@@ -1,7 +1,0 @@
-config BR2_PACKAGE_RUBYFPV
-	bool "rubyfpv"
-	select BR2_PACKAGE_IW
-	help
-	  Ruby package
-
-	  https://rubyfpv.com

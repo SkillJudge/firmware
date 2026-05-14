@@ -1,5 +1,0 @@
-type _nabto._udp
-port 5592
-txt productid=device
-txt deviceid=device
-txt fn=Cloud
