@@ -1,0 +1,1 @@
+make BOARD=gk7205v300 defconfig
