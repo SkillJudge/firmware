@@ -1,5 +1,0 @@
-config BR2_PACKAGE_YAML_CLI_MULTI
-	bool "Yaml parser"
-	help
-	  Parses yaml files.
-	  https://github.com/vertexodessa/yaml-cli-multi

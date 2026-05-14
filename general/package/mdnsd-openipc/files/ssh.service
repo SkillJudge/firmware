@@ -1,3 +1,0 @@
-type _ssh._tcp
-port 22
-txt vendor=OpenIPC
