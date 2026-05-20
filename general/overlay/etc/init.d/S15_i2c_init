@@ -1,0 +1,31 @@
+#!/bin/sh
+#
+# 自定义开机 I2C1 引脚复用初始化脚本
+#
+
+case "$1" in
+  start)
+    echo "Starting custom I2C1 pinmux initialization..."
+    
+    # 1. 释放可能被 sysfs 占用的 GPIO 引脚（防止底层冲突）
+    echo 3 > /sys/class/gpio/unexport 2>/dev/null || true
+    echo 4 > /sys/class/gpio/unexport 2>/dev/null || true
+    
+    # 2. 通过 devmem 修改寄存器，切换为 I2C1_SCL 和 I2C1_SDA 模式
+    devmem 0x100C000C 32 0x03
+    devmem 0x100C0010 32 0x03
+    
+    echo "I2C1 pinmux completed."
+    ;;
+  stop)
+    # 关机或重启时无需特殊操作
+    ;;
+  restart|reload)
+    $0 start
+    ;;
+  *)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+esac
+
+exit 0
