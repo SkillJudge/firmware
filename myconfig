@@ -1,11 +1,11 @@
 #
 # Automatically generated file; DO NOT EDIT.
-# Buildroot -g8101d784-dirty Configuration
+# Buildroot -g3721c248 Configuration
 #
 BR2_HAVE_DOT_CONFIG=y
 BR2_EXTERNAL_NAMES="GENERAL"
 BR2_EXTERNAL_GENERAL_PATH="/home/hzhou/openipc/firmware/general"
-BR2_EXTERNAL_GENERAL_VERSION="-g8101d784-dirty"
+BR2_EXTERNAL_GENERAL_VERSION="-g3721c248"
 BR2_HOST_GCC_AT_LEAST_4_9=y
 BR2_HOST_GCC_AT_LEAST_5=y
 BR2_HOST_GCC_AT_LEAST_6=y
@@ -2849,8 +2849,7 @@ BR2_PACKAGE_WPA_SUPPLICANT_CTRL_IFACE=y
 #
 # -------------------------------------------------------
 #
-BR2_PACKAGE_OPKG=y
-# BR2_PACKAGE_OPKG_GPG_SIGN is not set
+# BR2_PACKAGE_OPKG is not set
 # BR2_PACKAGE_OPKG_UTILS is not set
 
 #
