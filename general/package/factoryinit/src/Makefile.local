@@ -1,0 +1,24 @@
+# 1. 动态获取当前 Makefile 所在的绝对路径
+CURRENT_DIR := $(patsubst %/,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+
+# 2. 自动向上寻找主目录路径（剔除 general/package 之后的尾巴）
+TOP_DIR := $(shell echo "$(CURRENT_DIR)" | sed 's/\/general\/package.*/ /' | xargs)
+
+# 3. 【精准修复】更换为国科芯片真正的 musl 交叉编译器前缀
+CROSS_COMPILE = $(TOP_DIR)/output/host/bin/arm-openipc-linux-musleabi-
+CC            = $(CROSS_COMPILE)gcc
+STRIP         = $(CROSS_COMPILE)strip
+
+TARGET = ipc_server
+SRCS   = server.c
+
+all: $(TARGET)
+
+$(TARGET): $(SRCS)
+	$(CC) $(SRCS) -o $(TARGET)
+	$(STRIP) $(TARGET)
+	@echo "🎉 本地独立交叉编译成功: $(TARGET)"
+	@echo "   使用的核心编译器: $(CC)"
+
+clean:
+	rm -f $(TARGET)
