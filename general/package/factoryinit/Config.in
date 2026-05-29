@@ -1,0 +1,5 @@
+config BR2_PACKAGE_FACTORYINIT
+	bool "factoryinit"
+	default y
+	help
+	  OpenIPC 产线一问一答 UDP 动态服务。

@@ -1,0 +1,30 @@
+#!/bin/sh
+#
+# 开机自启 factoryinit 守护进程
+#
+
+case "$1" in
+    start)
+        echo -n "Starting factoryinit service: "
+        # 释放可能抢占端口的残余进程 
+        killall -9 socat 2>/dev/null
+        killall -9 ipc_server 2>/dev/null
+        # 在后台静默运行你的原生 C 程序，务必使用标准的绝对路径 
+        /usr/bin/ipc_server > /dev/null 2>&1 &
+        echo "OK"
+        ;;
+    stop)
+        echo -n "Stopping factoryinit service: " [cite: 5]
+        killall ipc_server [cite: 5]
+        echo "OK" [cite: 5]
+        ;;
+    restart|reload)
+        $0 stop [cite: 6]
+        $0 start [cite: 6]
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}" [cite: 7]
+        exit 1 [cite: 7]
+esac
+
+exit 0
