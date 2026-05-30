@@ -1,0 +1,51 @@
+#!/bin/sh
+
+# 固定 Wi-Fi 参数预置脚本。
+#
+# 在原生 S40network 启动前写入固定参数。
+
+CONFIG_FILE="/etc/wifi.conf"
+
+set_env_if_changed() {
+    name="$1"
+    value="$2"
+
+    # 仅在参数变化时写入 Flash，避免每次开机重复擦写环境区。
+    if [ "$(fw_printenv -n "$name" 2>/dev/null)" = "$value" ]; then
+        return 0
+    fi
+
+    fw_setenv "$name" "$value"
+}
+
+start() {
+    [ -r "$CONFIG_FILE" ] || return 1
+    . "$CONFIG_FILE"
+
+    set_env_if_changed wlandev "$WIFI_DEVICE" || return 1
+    set_env_if_changed wlanssid "$WIFI_SSID" || return 1
+    set_env_if_changed wlanpass "$WIFI_PASSWORD" || return 1
+    set_env_if_changed netaddr_fallback "$ETH_FALLBACK_IP" || return 1
+}
+
+stop() {
+    # 网络启停由原生 S40network 负责。
+    return 0
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        stop
+        start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|reload}"
+        exit 1
+        ;;
+esac
