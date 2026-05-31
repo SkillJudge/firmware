@@ -1,0 +1,72 @@
+#!/bin/sh
+
+FTP_URL="$1"
+LOCAL_PATH="/tmp/firmware/firmware"
+FIRMWARE_FILE="$LOCAL_PATH/rootfs.squashfs.gk7205v300"
+
+# 1. 记录总升级开始的时间戳（单位：秒）
+START_TIME=$(date +%s)
+
+echo "=== [DEBUG] Start firmware update script ==="
+echo "=== [DEBUG] Target URL: $FTP_URL"
+
+mkdir -p "$LOCAL_PATH"
+rm -rf "$LOCAL_PATH"/*
+
+echo "=== [DEBUG] Starting download... ==="
+DOWNLOAD_START=$(date +%s)
+
+wget -T 15 -t 2 -O "$FIRMWARE_FILE" "$FTP_URL"
+WGET_RET=$?
+
+DOWNLOAD_END=$(date +%s)
+DOWNLOAD_DURATION=$((DOWNLOAD_END - DOWNLOAD_START))
+echo "=== [DEBUG] Download finished. Took $DOWNLOAD_DURATION seconds. ==="
+
+if [ $WGET_RET -ne 0 ] || [ ! -f "$FIRMWARE_FILE" ]; then
+    echo "DOWNLOADFAIL"
+    exit 0
+fi
+
+# 校验大小
+size=$(stat -c "%s" "$FIRMWARE_FILE")
+min=$((7*1024*1024))
+max=$((8*1024*1024))
+
+if [ "$size" -lt "$min" ] || [ "$size" -gt "$max" ]; then
+    echo "CHECKFAIL"
+    exit 0
+fi
+
+echo "=== [DEBUG] Size check passed. Starting sysupgrade... ==="
+FLASH_START=$(date +%s)
+
+# 升级
+sysupgrade --rootfs="$FIRMWARE_FILE" -f -n -z 
+SYS_RET=$?
+
+FLASH_END=$(date +%s)
+FLASH_DURATION=$((FLASH_END - FLASH_START))
+TOTAL_DURATION=$((FLASH_END - START_TIME))
+
+echo "=== [DEBUG] sysupgrade exit code: $SYS_RET ==="
+echo "=== [DEBUG] Flashing and erasing took $FLASH_DURATION seconds. ==="
+
+# 0 和 1 都代表刷写成功
+if [ $SYS_RET -eq 0 ] || [ $SYS_RET -eq 1 ]; then
+    echo "SUCCESS"
+    echo "=========================================================="
+    echo " 🎉 升级成功！"
+    echo " ⬇️  下载耗时: $DOWNLOAD_DURATION 秒"
+    echo " 💾 刷写耗时: $FLASH_DURATION 秒"
+    echo " ⏱️  总共耗时: $TOTAL_DURATION 秒"
+    echo "=========================================================="
+    echo "=== [DEBUG] Rebooting in 5 seconds... ==="
+    sleep 5
+    reboot
+else
+    echo "FAIL"
+    echo "=== [DEBUG] Total time spent before failure: $TOTAL_DURATION seconds. ==="
+fi
+
+exit 0
