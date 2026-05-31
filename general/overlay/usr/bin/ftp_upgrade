@@ -1,7 +1,7 @@
 #!/bin/sh
 
 FTP_URL="$1"
-LOCAL_PATH="/mnt/mmcblk0p1/firmware"
+LOCAL_PATH="/tmp/firmware"
 FIRMWARE_FILE="$LOCAL_PATH/rootfs.squashfs.gk7205v300"
 
 # ======= 核心修改：改用不随网络对时改变的 uptime (秒数) =======
