@@ -1,10 +1,10 @@
 #!/bin/sh
 
 FTP_URL="$1"
-LOCAL_PATH="/tmp/firmware/firmware"
+LOCAL_PATH="/mnt/mmcblk0p1/firmware"
 FIRMWARE_FILE="$LOCAL_PATH/rootfs.squashfs.gk7205v300"
 
-# ======= 优化1：改用不受网络对时影响的单调时间（uptime） =======
+# ======= 核心修改：改用不随网络对时改变的 uptime (秒数) =======
 START_TIME=$(awk '{print int($1)}' /proc/uptime)
 
 echo "=== [DEBUG] Start firmware update script ==="
@@ -13,7 +13,7 @@ echo "=== [DEBUG] Target URL: $FTP_URL"
 mkdir -p "$LOCAL_PATH"
 rm -rf "$LOCAL_PATH"/*
 
-echo "=== [DEBUG] Starting download to RAM... ==="
+echo "=== [DEBUG] Starting download... ==="
 DOWNLOAD_START=$(awk '{print int($1)}' /proc/uptime)
 
 wget -T 15 -t 2 -O "$FIRMWARE_FILE" "$FTP_URL"
@@ -41,8 +41,6 @@ fi
 echo "=== [DEBUG] Size check passed. Starting sysupgrade... ==="
 FLASH_START=$(awk '{print int($1)}' /proc/uptime)
 
-# ======= 优化2：核心参数调整 =======
-# 加上 -x 阻止其强行断电重启，确保能活到后面把时间计算并打印出来
 sysupgrade --rootfs="$FIRMWARE_FILE" -f -n -z -x
 SYS_RET=$?
 
@@ -51,13 +49,11 @@ FLASH_DURATION=$((FLASH_END - FLASH_START))
 TOTAL_DURATION=$((FLASH_END - START_TIME))
 
 echo "=== [DEBUG] sysupgrade exit code: $SYS_RET ==="
-echo "=== [DEBUG] Flashing and erasing took $FLASH_DURATION seconds. ==="
 
-# 0 和 1 都代表刷写成功（加上 -x 后成功通常返回 1）
 if [ $SYS_RET -eq 0 ] || [ $SYS_RET -eq 1 ]; then
     echo "SUCCESS"
     echo "=========================================================="
-    echo " 🎉 升级成功！(RAM 极速模式)"
+    echo " 🎉 升级成功！(物理时间精确统计)"
     echo " ⬇️  下载耗时: $DOWNLOAD_DURATION 秒"
     echo " 💾 刷写耗时: $FLASH_DURATION 秒"
     echo " ⏱️  总共耗时: $TOTAL_DURATION 秒"
