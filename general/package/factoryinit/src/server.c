@@ -3,6 +3,9 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/stat.h>   
+#include <sys/types.h> 
+#include <time.h>
 
 #define PORT 8086
 #define BUF_SIZE 1024
@@ -64,25 +67,58 @@ int main() {
         printf("[RECV] -> [%s]\n", buffer);
 
         if (strcmp(buffer, "DISCOVER") == 0) {
-            char ver[64], ipnum[64], deviceid[128], eth_ip[64], wifi_ip[64];
+            char ver[64] = {0};
+            char ipnum[64] = {0};
+            char deviceid[128] = {0};
+            char eth_ip[64] = {0};
+            char wifi_ip[64] = {0};
+            char eth_mac[64] = {0};
+            char wifi_mac[64] = {0};
 
+            // 全部初始化为 null
+            strcpy(ver, "null");
+            strcpy(ipnum, "null");
+            strcpy(deviceid, "null");
+            strcpy(eth_ip, "null");
+            strcpy(wifi_ip, "null");
+            strcpy(eth_mac, "null");
+            strcpy(wifi_mac, "null");
+
+            // 读取版本
             get_cmd_output("cat /etc/version 2>/dev/null", ver, sizeof(ver));
+
+            // 读取 IPCNUM
             get_cmd_output("ipcinfo -i 2>/dev/null", ipnum, sizeof(ipnum));
+
+            // 读取 DEVICEID
             get_cmd_output("fw_printenv -n DEVICE_ID 2>/dev/null", deviceid, sizeof(deviceid));
+
+            // 读取 eth0 IP
             get_cmd_output("ip addr show eth0 2>/dev/null | awk '/inet /{split($2,a,\"/\");print a[1]}'", eth_ip, sizeof(eth_ip));
-            get_cmd_output("ip addr show wlan0 2>/dev/null | awk '/inet /{split($2,a,\"/\");print a[1]}'", wifi_ip, sizeof(wifi_ip));
 
-            if (strcmp(ver, "null") == 0) strcpy(ver, "2.1.3");
-            if (strcmp(ipnum, "null") == 0) strcpy(ipnum, "23456091");
-            if (strcmp(wifi_ip, "null") == 0) strcpy(wifi_ip, "192.168.0.1");
+            // 读取 eth0 MAC（你的设备能读到）
+            get_cmd_output("cat /sys/class/net/eth0/address 2>/dev/null", eth_mac, sizeof(eth_mac));
 
-            snprintf(resp_buf, sizeof(resp_buf), 
-                     "DEVICEID=%s|VER=%s|IP=%s|WIFI_IP=%s|IPCNUM=%s", 
-                     deviceid, ver, eth_ip, wifi_ip, ipnum);
+            // wlan0 读不到 → 保持 null
+            // wifi_mac = null
+            // wifi_ip = null
 
+            // 拼接协议（严格格式）
+            snprintf(resp_buf, sizeof(resp_buf),
+                "DEVICEID=%s|VER=%s|IP=%s|WIFI_IP=%s|IPCNUM=%s|MAC=%s|WIFI_MAC=%s",
+                deviceid,
+                ver,
+                eth_ip,
+                wifi_ip,
+                ipnum,
+                eth_mac,
+                wifi_mac
+            );
+
+            // 发送
             sendto(sock, resp_buf, strlen(resp_buf), 0, (struct sockaddr *)&client_addr, addr_len);
-            printf("[SEND] 回复: %s\n", resp_buf);
-        } 
+            printf("[SEND] %s\n", resp_buf);
+        }
         else if (strncmp(buffer, "SET=DEVICEID:", 13) == 0) {
             char new_id[64];
             strcpy(new_id, buffer + 13);
@@ -97,8 +133,46 @@ int main() {
             }
         } 
         else if (strcmp(buffer, "CAPTURE") == 0) {
-            system("ffmpeg -i rtsp://127.0.0.1:554/stream=0 -vframes 1 -q:v 2 /tmp/snap.jpg >/dev/null 2>&1");
+            char cmd[256];
+            time_t rawtime;
+            struct tm *timeinfo;
+            char timestamp[32];
+
+            // 1. 获取系统当前时间
+            time(&rawtime);
+            timeinfo = localtime(&rawtime);
+
+            // 2. 格式化时间戳 (例如: 20260531_071530)
+            strftime(timestamp, sizeof(timestamp), "%Y%m%d_%H%M%S", timeinfo);
+
+            // 3. 拼接绝对路径的 curl 命令，避开 system() 无法解析 $(date) 的问题
+            // 注意：这里显式指定 /usr/bin/curl 或 /bin/curl，防止找不到命令（你可以通过 which curl 确认路径）
+            snprintf(cmd, sizeof(cmd), 
+                     "/usr/bin/curl -s -o /mnt/mmcblk0p1/snapshot/snap_%s.jpg \"http://127.0.0.1:80/image.jpg\"", 
+                     timestamp);
+
+            // 4. 执行命令
+            int ret = system(cmd);
+            
+            // 5. 打印调试日志，方便你从串口或日志里看命令到底长啥样，以及执行结果
+            printf("Execute cmd: %s, return code: %d\n", cmd, ret);
+
             sendto(sock, "SNAP_SUCCESS", 12, 0, (struct sockaddr *)&client_addr, addr_len);
+        }
+        else if (strstr(buffer, "FIRMWAREUPDATE=") == buffer)
+        {
+            const char *ftp_url = buffer + strlen("FIRMWAREUPDATE=");
+            char cmd[512];
+            
+            // 拼接后台执行命令
+            // 1. 显式调用 /bin/sh 执行脚本
+            // 2. 末尾加上 & 让其进入系统后台运行，绝不阻塞主循环
+            snprintf(cmd, sizeof(cmd), "/bin/sh /usr/bin/ftp_upgrade \"%s\" &", ftp_url);
+
+            printf("[UPDATE] Triggered background upgrade: %s\n", cmd);
+            
+            // 执行后立刻返回，主程序不会被卡死
+            system(cmd);
         }
     }
     close(sock);

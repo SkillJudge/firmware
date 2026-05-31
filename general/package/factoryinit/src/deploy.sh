@@ -12,9 +12,6 @@ TARGET_NAME="ipc_server"
 
 echo "=== [1/3] 正在进入 src 目录调用 Makefile.local 独立编译 ==="
 
-# ⚡ 关键修复：强制切进包含代码的 src 目录
-cd ./src
-
 # ⚡ 关键修复：显式指定读取本地独立编译配置文件 Makefile.local
 make -f Makefile.local clean
 if ! make -f Makefile.local; then
@@ -28,13 +25,20 @@ if ! command -v sshpass &>/dev/null; then
     sudo apt-get update && sudo apt-get install -y sshpass
 fi
 
+# ⚡ 新增：清理本地旧的 SSH 主机密钥（解决主机标识变更问题）
+echo -e "\n=== 清理本地旧的 SSH 主机密钥 ==="
+ssh-keygen -f "${HOME}/.ssh/known_hosts" -R "${IPC_IP}" &>/dev/null
+echo "✅ 已清理 ${IPC_IP} 旧的 SSH 主机密钥"
+
 echo -e "\n=== [2/3] 正在通过网络拷贝到摄像头 ($IPC_IP) ==="
 
 # 💡 安全防护：如果摄像头里老程序正在运行，先强行杀掉它，否则文件被锁会导致传输失败
-sshpass -p "${IPC_PASS}" ssh -o StrictHostKeyChecking=no ${IPC_USER}@${IPC_IP} "killall -9 ${TARGET_NAME} 2>/dev/null"
+# ⚡ 强化 SSH 参数：增加 -o PasswordAuthentication=yes 强制启用密码认证
+sshpass -p "${IPC_PASS}" ssh -o StrictHostKeyChecking=no -o PasswordAuthentication=yes ${IPC_USER}@${IPC_IP} "killall -9 ${TARGET_NAME} 2>/dev/null"
 
 # 使用 scp 将编译出来的二进制文件推送到目标的存储卡目录
-sshpass -p "${IPC_PASS}" scp -O -o StrictHostKeyChecking=no ${TARGET_NAME} ${IPC_USER}@${IPC_IP}:${TARGET_DIR}/
+# ⚡ 同样强化 scp 的 SSH 参数
+sshpass -p "${IPC_PASS}" scp -O -o StrictHostKeyChecking=no -o PasswordAuthentication=yes ${TARGET_NAME} ${IPC_USER}@${IPC_IP}:${TARGET_DIR}/
 
 if [ $? -eq 0 ]; then
     echo "👍 文件传输成功！"
@@ -45,7 +49,8 @@ fi
 
 echo -e "\n=== [3/3] 正在远程赋予执行权限并尝试后台唤醒 ==="
 # 远程赋予可执行权限，杀掉旧的占位 socat，并直接在摄像头后台拉起你的全新专属服务
-sshpass -p "${IPC_PASS}" ssh -o StrictHostKeyChecking=no ${IPC_USER}@${IPC_IP} \
+# ⚡ 强化 SSH 参数
+sshpass -p "${IPC_PASS}" ssh -o StrictHostKeyChecking=no -o PasswordAuthentication=yes ${IPC_USER}@${IPC_IP} \
     "chmod +x ${TARGET_DIR}/${TARGET_NAME} && killall -9 socat 2>/dev/null; ${TARGET_DIR}/${TARGET_NAME} &"
 
 echo -e "\n=========================================================="
