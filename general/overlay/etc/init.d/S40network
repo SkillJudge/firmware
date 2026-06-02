@@ -1,20 +1,18 @@
 #!/bin/sh
 
-# 有线优先、Wi-Fi 兜底的网络启动脚本。
-# 板端放置位置：/etc/init.d/S40network
+# 开机时只判断一次网络连接方式。
+# eth0 已连接网线时使用有线网络，否则使用 Wi-Fi。
 
 CONFIG_FILE="/etc/wifi.conf"
-ETH_CARRIER_WAIT_SEC=5
-ETH_DHCP_WAIT_SEC=10
+ETH_CARRIER_WAIT_SEC=3
 
 wlan_mac=$(fw_printenv -n wlanmac 2>/dev/null)
-eth_mac=$(fw_printenv -n ethaddr 2>/dev/null)
 
 set_env_if_changed() {
     name="$1"
     value="$2"
 
-    # 仅在参数变化时写入 Flash，避免每次启动重复擦写环境区。
+    # 仅在参数变化时写入 Flash，避免每次开机重复擦写环境区。
     if [ "$(fw_printenv -n "$name" 2>/dev/null)" = "$value" ]; then
         return 0
     fi
@@ -25,10 +23,24 @@ set_env_if_changed() {
 stop_eth0() {
     ifdown -f eth0 >/dev/null 2>&1
     ip addr flush dev eth0 2>/dev/null
+    ifconfig eth0 down 2>/dev/null
 }
 
-wait_for_eth0_carrier() {
+stop_wifi() {
+    ifdown -f wlan0 >/dev/null 2>&1
+    ip addr flush dev wlan0 2>/dev/null
+    ifconfig wlan0 down 2>/dev/null
+}
+
+start_eth0() {
+    stop_wifi
+    ifup eth0
+}
+
+eth0_connected() {
     count=0
+
+    ifconfig eth0 up 2>/dev/null || return 1
 
     while [ "$count" -lt "$ETH_CARRIER_WAIT_SEC" ]; do
         if [ "$(cat /sys/class/net/eth0/carrier 2>/dev/null)" = "1" ]; then
@@ -42,73 +54,43 @@ wait_for_eth0_carrier() {
     return 1
 }
 
-wait_for_eth0_ipv4() {
-    count=0
-
-    while [ "$count" -lt "$ETH_DHCP_WAIT_SEC" ]; do
-        if ip addr show dev eth0 2>/dev/null | grep -q 'inet '; then
-            return 0
-        fi
-
-        count=$((count + 1))
-        sleep 1
-    done
-
-    return 1
-}
-
-start_eth0() {
-    [ -e /sys/class/net/eth0 ] || return 1
-
-    # 清除上次 Wi-Fi 模式遗留的维护地址，再尝试有线 DHCP。
-    stop_eth0
-    ifconfig eth0 up || return 1
-    wait_for_eth0_carrier || return 1
-    ifup eth0 || return 1
-    wait_for_eth0_ipv4
-}
-
 start_wifi() {
+    stop_eth0
+
     [ -r "$CONFIG_FILE" ] || return 1
     . "$CONFIG_FILE"
-
-    # 先保留网线直连维护入口，即使 Wi-Fi 启动失败也可以继续排查。
-    if [ -e /sys/class/net/eth0 ]; then
-        ifconfig eth0 "$ETH_FALLBACK_IP" netmask "$ETH_FALLBACK_NETMASK" \
-            hw ether "${eth_mac:-00:00:23:34:45:66}" up
-    fi
 
     set_env_if_changed wlanssid "$WIFI_SSID" || return 1
     set_env_if_changed wlanpass "$WIFI_PASSWORD" || return 1
 
     if /etc/wireless/usb "$WIFI_DEVICE" || /etc/wireless/sdio "$WIFI_DEVICE"; then
         [ -n "$wlan_mac" ] && ip link set dev wlan0 address "$wlan_mac"
-        ifup wlan0 || return 1
-    else
-        return 1
+        ifup wlan0
+        return $?
     fi
+
+    return 1
 }
 
 start() {
     echo "Starting network..."
     ifup lo
 
-    if start_eth0; then
+    if eth0_connected; then
         echo "Using wired network."
-        return 0
+        start_eth0
+    else
+        echo "Using Wi-Fi network."
+        start_wifi
     fi
-
-    stop_eth0
-    echo "Wired network unavailable, starting Wi-Fi..."
-    start_wifi
 }
 
 stop() {
     echo "Stopping network..."
-    ifdown -f wlan0
-    ifdown -f usb0
-    ifdown -f eth1
-    ifdown -f eth0
+    stop_wifi
+    stop_eth0
+    ifdown -f usb0 >/dev/null 2>&1
+    ifdown -f eth1 >/dev/null 2>&1
     ifdown lo
 }
 
