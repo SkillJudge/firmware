@@ -29,8 +29,8 @@ delete_package_archives() {
 delete_installed_files() {
     # 只有目标版本等于当前安装版本时才删除 APP_HOME 内容，避免误删其它版本目录。
     target_version="$1"
-    [ "$target_version" = "$DEVICE_VERSION" ] || {
-        log_info "skip installed file purge because target_version=$target_version current_version=$DEVICE_VERSION"
+    [ "$target_version" = "$INSTALLED_PACKAGE_VERSION" ] || {
+        log_info "skip installed file purge because target_version=$target_version installed_package_version=$INSTALLED_PACKAGE_VERSION"
         return 0
     }
 
@@ -52,7 +52,9 @@ ensure_layout
 state_init
 print_title "$DELETE_PAGE_TITLE"
 
-TARGET_VERSION="${1:-$DEVICE_VERSION}"
+INSTALLED_PACKAGE_VERSION=$(sed -n '1p' "$INSTALLED_PACKAGE_VERSION_FILE" 2>/dev/null | tr -d '\r\n')
+[ -n "$INSTALLED_PACKAGE_VERSION" ] || INSTALLED_PACKAGE_VERSION="unknown"
+TARGET_VERSION="${1:-$INSTALLED_PACKAGE_VERSION}"
 
 log_info "delete_all start target_version=$TARGET_VERSION app_home=$APP_HOME"
 stop_pidfile_process "$SEGMENT_WORKER_PID_FILE"

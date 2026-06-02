@@ -1,7 +1,7 @@
 #!/bin/sh
 
 SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
-. "$SCRIPT_DIR/common.sh"
+. "$SCRIPT_DIR/state.sh"
 
 # Only these three bits belong to LEDs. Preserve every other expander bit.
 LED_CONTROL_MASK=$((LED_MONO_MASK | LED_STREAM_MASK | LED_UPLOAD_MASK))
@@ -115,6 +115,25 @@ led_upload_has_tokens() {
     return 1
 }
 
+led_upload_prune_expired_tokens() {
+    led_upload_tokens_prepare
+    led_now=$(raw_now_sec)
+
+    for led_token_file in "$LED_UPLOAD_TOKEN_DIR"/upload_*; do
+        [ -f "$led_token_file" ] || continue
+        led_token_release_at=$(cat "$led_token_file" 2>/dev/null)
+        case "$led_token_release_at" in
+            ''|*[!0-9]*)
+                continue
+                ;;
+        esac
+
+        if [ "$led_now" -ge "$led_token_release_at" ]; then
+            rm -f "$led_token_file"
+        fi
+    done
+}
+
 led_upload_blink_worker() {
     led_upload_tokens_prepare
     if ! claim_pidfile "$LED_UPLOAD_BLINK_PID_FILE"; then
@@ -126,15 +145,47 @@ led_upload_blink_worker() {
     log_debug_tag "LED" "upload blink worker start"
 
     while true; do
+        led_upload_prune_expired_tokens
         if led_upload_has_tokens; then
             led_upload_on
             sleep "$LED_UPLOAD_ON_SEC"
             led_upload_off
             sleep "$LED_UPLOAD_OFF_SEC"
         else
+            led_upload_off
             sleep "$LED_IDLE_POLL_SEC"
         fi
     done
+}
+
+led_sync_business_state() {
+    led_set_mask=0
+    led_clear_mask=0
+
+    if [ "$(state_get_publishing)" = "true" ]; then
+        led_set_mask=$((led_set_mask | LED_STREAM_MASK))
+    else
+        led_clear_mask=$((led_clear_mask | LED_STREAM_MASK))
+    fi
+
+    if [ "$(state_get_recording)" = "true" ]; then
+        led_set_mask=$((led_set_mask | LED_MONO_MASK))
+    else
+        led_clear_mask=$((led_clear_mask | LED_MONO_MASK))
+    fi
+
+    led_update_bits "$led_set_mask" "$led_clear_mask"
+}
+
+led_sync_business_after_delay() {
+    sleep "$LED_STATUS_DELAY_SEC"
+    is_pid_running_file "$MAIN_PID_FILE" || return 0
+    led_sync_business_state
+}
+
+led_schedule_business_sync() {
+    [ "$LED_ENABLED" = "true" ] || return 0
+    sh "$APP_HOME/led.sh" sync_business_after_delay >/dev/null 2>&1 &
 }
 
 led_upload_worker_start() {
@@ -159,7 +210,7 @@ led_upload_begin() {
         led_token_suffix=$((led_token_suffix + 1))
     done
 
-    : > "$led_token_path" || {
+    printf 'active:%s\n' "$(raw_now_sec)" > "$led_token_path" || {
         log_warn_tag "LED" "upload token create failed path=$led_token_path"
         return 1
     }
@@ -172,7 +223,32 @@ led_upload_begin() {
 led_upload_end() {
     led_token_path="$1"
     [ -n "$led_token_path" ] || return 0
-    rm -f "$led_token_path"
+
+    led_now=$(raw_now_sec)
+    led_token_state=$(cat "$led_token_path" 2>/dev/null)
+    case "$led_token_state" in
+        active:*)
+            led_started=${led_token_state#active:}
+            case "$led_started" in
+                ''|*[!0-9]*) led_started="$led_now" ;;
+            esac
+            led_release_at=$((led_started + LED_UPLOAD_MIN_BLINK_SEC))
+            ;;
+        ''|*[!0-9]*)
+            led_release_at="$led_now"
+            ;;
+        *)
+            led_release_at="$led_token_state"
+            ;;
+    esac
+
+    if [ "$led_release_at" -le "$led_now" ]; then
+        rm -f "$led_token_path"
+    else
+        printf '%s\n' "$led_release_at" > "$led_token_path"
+    fi
+
+    led_upload_prune_expired_tokens
     if ! led_upload_has_tokens; then
         led_upload_off || true
     fi
@@ -208,8 +284,10 @@ if [ "$(basename "$0")" = "led.sh" ]; then
         upload_on) led_upload_on ;;
         upload_off) led_upload_off ;;
         upload_blink_worker) led_upload_blink_worker ;;
+        sync_business) led_sync_business_state ;;
+        sync_business_after_delay) led_sync_business_after_delay ;;
         *)
-            echo "usage: sh led.sh {all_on|all_off|stream_on|stream_off|record_on|record_off|upload_on|upload_off|upload_blink_worker}" >&2
+            echo "usage: sh led.sh {all_on|all_off|stream_on|stream_off|record_on|record_off|upload_on|upload_off|upload_blink_worker|sync_business|sync_business_after_delay}" >&2
             exit 1
             ;;
     esac
