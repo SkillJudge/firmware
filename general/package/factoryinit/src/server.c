@@ -93,15 +93,17 @@ int main() {
             // 读取 DEVICEID
             get_cmd_output("fw_printenv -n DEVICE_ID 2>/dev/null", deviceid, sizeof(deviceid));
 
-            // 读取 eth0 IP
-            get_cmd_output("ip addr show eth0 2>/dev/null | awk '/inet /{split($2,a,\"/\");print a[1]}'", eth_ip, sizeof(eth_ip));
+            // 读取 eth0 IP 
+            get_cmd_output("ip addr show eth0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1", eth_ip, sizeof(eth_ip));
 
-            // 读取 eth0 MAC（你的设备能读到）
+            // 读取 eth0 MAC
             get_cmd_output("cat /sys/class/net/eth0/address 2>/dev/null", eth_mac, sizeof(eth_mac));
 
-            // wlan0 读不到 → 保持 null
-            // wifi_mac = null
-            // wifi_ip = null
+            // 无线 IP
+            get_cmd_output("ip addr show wlan0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1", wifi_ip, sizeof(wifi_ip)); 
+
+            // 读取 wlan0 MAC 
+            get_cmd_output("cat /sys/class/net/wlan0/address 2>/dev/null", wifi_mac, sizeof(wifi_mac));
 
             // 拼接协议（严格格式）
             snprintf(resp_buf, sizeof(resp_buf),

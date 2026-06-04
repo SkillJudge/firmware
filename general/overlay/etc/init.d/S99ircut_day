@@ -1,0 +1,30 @@
+#!/bin/sh
+
+PIN_A=10
+PIN_B=11
+
+start() {
+    sleep 3
+    # 导出GPIO
+    [ ! -d /sys/class/gpio/gpio$PIN_A ] && echo $PIN_A > /sys/class/gpio/export
+    [ ! -d /sys/class/gpio/gpio$PIN_B ] && echo $PIN_B > /sys/class/gpio/export
+
+    echo out > /sys/class/gpio/gpio${PIN_A}/direction
+    echo out > /sys/class/gpio/gpio${PIN_B}/direction
+
+    # 切白天IRCUT
+    echo 1 > /sys/class/gpio/gpio${PIN_A}/value
+    echo 0 > /sys/class/gpio/gpio${PIN_B}/value
+    sleep 0.2
+    echo 0 > /sys/class/gpio/gpio${PIN_A}/value
+    echo 0 > /sys/class/gpio/gpio${PIN_B}/value
+}
+
+stop() {
+    :
+}
+
+case "$1" in
+start|stop) $1 ;;
+*) echo "Usage: $0 {start|stop}" ;;
+esac
