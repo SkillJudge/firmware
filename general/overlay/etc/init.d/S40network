@@ -1,10 +1,10 @@
 #!/bin/sh
 
-# 开机时只判断一次网络连接方式。
-# eth0 已连接网线时使用有线网络，否则使用 Wi-Fi。
+# 无线优先、有线保底的网络启动脚本。
+# 检测到无线网卡时只启动 Wi-Fi；没有无线网卡时只启动有线。
 
 CONFIG_FILE="/etc/wifi.conf"
-ETH_CARRIER_WAIT_SEC=3
+WLAN_WAIT_SEC=5
 
 wlan_mac=$(fw_printenv -n wlanmac 2>/dev/null)
 
@@ -20,6 +20,14 @@ set_env_if_changed() {
     fw_setenv "$name" "$value"
 }
 
+load_wifi_config() {
+    [ -r "$CONFIG_FILE" ] || return 1
+    . "$CONFIG_FILE"
+
+    set_env_if_changed wlanssid "$WIFI_SSID" || return 1
+    set_env_if_changed wlanpass "$WIFI_PASSWORD" || return 1
+}
+
 stop_eth0() {
     ifdown -f eth0 >/dev/null 2>&1
     ip addr flush dev eth0 2>/dev/null
@@ -32,18 +40,15 @@ stop_wifi() {
     ifconfig wlan0 down 2>/dev/null
 }
 
-start_eth0() {
-    stop_wifi
-    ifup eth0
-}
-
-eth0_connected() {
+load_wifi_device() {
     count=0
 
-    ifconfig eth0 up 2>/dev/null || return 1
+    load_wifi_config || return 1
 
-    while [ "$count" -lt "$ETH_CARRIER_WAIT_SEC" ]; do
-        if [ "$(cat /sys/class/net/eth0/carrier 2>/dev/null)" = "1" ]; then
+    /etc/wireless/usb "$WIFI_DEVICE" || /etc/wireless/sdio "$WIFI_DEVICE" || return 1
+
+    while [ "$count" -lt "$WLAN_WAIT_SEC" ]; do
+        if [ -e /sys/class/net/wlan0 ]; then
             return 0
         fi
 
@@ -57,31 +62,25 @@ eth0_connected() {
 start_wifi() {
     stop_eth0
 
-    [ -r "$CONFIG_FILE" ] || return 1
-    . "$CONFIG_FILE"
+    [ -n "$wlan_mac" ] && ip link set dev wlan0 address "$wlan_mac"
+    ifup wlan0
+}
 
-    set_env_if_changed wlanssid "$WIFI_SSID" || return 1
-    set_env_if_changed wlanpass "$WIFI_PASSWORD" || return 1
-
-    if /etc/wireless/usb "$WIFI_DEVICE" || /etc/wireless/sdio "$WIFI_DEVICE"; then
-        [ -n "$wlan_mac" ] && ip link set dev wlan0 address "$wlan_mac"
-        ifup wlan0
-        return $?
-    fi
-
-    return 1
+start_eth0() {
+    stop_wifi
+    ifup eth0
 }
 
 start() {
     echo "Starting network..."
     ifup lo
 
-    if eth0_connected; then
-        echo "Using wired network."
-        start_eth0
-    else
+    if load_wifi_device; then
         echo "Using Wi-Fi network."
         start_wifi
+    else
+        echo "Wi-Fi device not found, using wired network."
+        start_eth0
     fi
 }
 
