@@ -76,7 +76,6 @@ records:
 
 outgoing:
   enabled: true
-  server: rtmp://123.60.51.11:1935/live/stream
   substream: true
 
 watchdog:
