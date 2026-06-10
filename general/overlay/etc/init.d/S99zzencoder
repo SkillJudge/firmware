@@ -1,0 +1,100 @@
+#!/bin/sh
+
+# 编码器开机自启动服务。
+# 文件名排在 S99rc.local 之后，确保网络、系统服务和 rc.local 已经完成启动。
+
+ADD_EXEC_SCRIPT="${ADD_EXEC_SCRIPT:-/root/add_exec.sh}"
+START_ENCODER_SCRIPT="${START_ENCODER_SCRIPT:-/root/encoder/start_encoder.sh}"
+START_LOG_FILE="${START_LOG_FILE:-/tmp/start_encoder.log}"
+JQ_SOURCE_FILE="${JQ_SOURCE_FILE:-/mnt/mmcblk0p1/jq-linux-armhf}"
+STATE_DIR="${STATE_DIR:-/root/encoder/runtime/state}"
+START_LOCK_DIR="${START_LOCK_DIR:-${STATE_DIR}/start_encoder.lock}"
+MAIN_PID_FILE="${MAIN_PID_FILE:-${STATE_DIR}/encoder_main.pid}"
+
+stop_pid_file() {
+    pid_file="$1"
+    pid=$(cat "$pid_file" 2>/dev/null)
+
+    case "$pid" in
+        ''|*[!0-9]*)
+            rm -f "$pid_file"
+            return 0
+            ;;
+    esac
+
+    if kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null
+        wait_count=0
+        while kill -0 "$pid" 2>/dev/null && [ "$wait_count" -lt 5 ]; do
+            sleep 1
+            wait_count=$((wait_count + 1))
+        done
+    fi
+
+    rm -f "$pid_file"
+}
+
+start() {
+    echo "Starting encoder controller..."
+
+    if [ ! -f "$ADD_EXEC_SCRIPT" ]; then
+        echo "encoder startup failed: permission script missing: $ADD_EXEC_SCRIPT" >&2
+        return 1
+    fi
+
+    sh "$ADD_EXEC_SCRIPT" || {
+        echo "encoder startup failed: executable permission setup failed" >&2
+        return 1
+    }
+
+    if [ ! -f "$JQ_SOURCE_FILE" ]; then
+        echo "encoder startup failed: jq source file missing: $JQ_SOURCE_FILE" >&2
+        return 1
+    fi
+
+    if [ -z "${DEVICE_ID:-}" ]; then
+        echo "encoder startup warning: DEVICE_ID is missing" >&2
+    else
+        echo "encoder startup DEVICE_ID=$DEVICE_ID"
+    fi
+
+    if [ ! -f "$START_ENCODER_SCRIPT" ]; then
+        echo "encoder startup failed: launcher missing: $START_ENCODER_SCRIPT" >&2
+        return 1
+    fi
+
+    # 启动器内部还会等待 START_DELAY_SEC，S99 服务本身立即返回，不阻塞后续启动流程。
+    nohup sh "$START_ENCODER_SCRIPT" > "$START_LOG_FILE" 2>&1 &
+    echo "encoder startup scheduled, log=$START_LOG_FILE"
+}
+
+stop() {
+    echo "Stopping encoder controller..."
+
+    # 如果延迟启动器仍在等待，先停止它，避免关机期间再次拉起主程序。
+    stop_pid_file "$START_LOCK_DIR/pid"
+    rm -rf "$START_LOCK_DIR"
+
+    # encoder_main.sh 收到 TERM 后会执行自身 cleanup。
+    stop_pid_file "$MAIN_PID_FILE"
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart)
+        stop
+        sleep 1
+        start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+
+exit $?

@@ -26,9 +26,8 @@ fi
 
 unset CONFIG_PROCESS_DEVICE_ID
 
-# 板子版本从系统文件读取，用于注册、心跳和日志。安装包版本单独保存在 .installed_package_version。
+# 板子版本统一从系统文件读取，用于注册、心跳、日志和清理。
 DEVICE_VERSION_FILE="/etc/version" # 板子系统版本文件，读取首行作为上报版本。
-INSTALLED_PACKAGE_VERSION_FILE="${APP_HOME}/.installed_package_version" # 当前脚本安装包版本记录文件。
 
 get_device_version() {
     device_version_value=$(sed -n '1p' "$DEVICE_VERSION_FILE" 2>/dev/null | tr -d '\r\n')

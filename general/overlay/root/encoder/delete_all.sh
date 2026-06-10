@@ -6,10 +6,16 @@ SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$SCRIPT_DIR/state.sh"
 . "$SCRIPT_DIR/led.sh"
 
+normalize_version() {
+    printf '%s\n' "$1" | sed 's/^V-//'
+}
+
 delete_package_archives() {
     # 在常见目录中删除指定版本的安装包，避免旧包被误安装。
     target_version="$1"
     [ -n "$target_version" ] || return 0
+    normalized_version=$(normalize_version "$target_version")
+    package_version="V-${normalized_version}"
 
     for base_dir in "$PWD" "$APP_HOME" "$(dirname "$APP_HOME")" "/root" "/tmp"; do
         [ -d "$base_dir" ] || continue
@@ -17,7 +23,11 @@ delete_package_archives() {
             -name "${target_version}.tar.gz" -o \
             -name "${target_version}.tgz" -o \
             -name "${target_version}.tar" -o \
-            -name "${target_version}.zip" \
+            -name "${target_version}.zip" -o \
+            -name "${package_version}.tar.gz" -o \
+            -name "${package_version}.tgz" -o \
+            -name "${package_version}.tar" -o \
+            -name "${package_version}.zip" \
         \) 2>/dev/null | while IFS= read -r archive_path; do
             [ -n "$archive_path" ] || continue
             log_info "delete archive file=$archive_path"
@@ -27,10 +37,12 @@ delete_package_archives() {
 }
 
 delete_installed_files() {
-    # 只有目标版本等于当前安装版本时才删除 APP_HOME 内容，避免误删其它版本目录。
+    # 只有目标版本等于 /etc/version 中的板子版本时才删除 APP_HOME 内容。
     target_version="$1"
-    [ "$target_version" = "$INSTALLED_PACKAGE_VERSION" ] || {
-        log_info "skip installed file purge because target_version=$target_version installed_package_version=$INSTALLED_PACKAGE_VERSION"
+    normalized_target_version=$(normalize_version "$target_version")
+    normalized_device_version=$(normalize_version "$DEVICE_VERSION")
+    [ "$normalized_target_version" = "$normalized_device_version" ] || {
+        log_info "skip installed file purge because target_version=$target_version device_version=$DEVICE_VERSION"
         return 0
     }
 
@@ -52,11 +64,9 @@ ensure_layout
 state_init
 print_title "$DELETE_PAGE_TITLE"
 
-INSTALLED_PACKAGE_VERSION=$(sed -n '1p' "$INSTALLED_PACKAGE_VERSION_FILE" 2>/dev/null | tr -d '\r\n')
-[ -n "$INSTALLED_PACKAGE_VERSION" ] || INSTALLED_PACKAGE_VERSION="unknown"
-TARGET_VERSION="${1:-$INSTALLED_PACKAGE_VERSION}"
+TARGET_VERSION="${1:-$DEVICE_VERSION}"
 
-log_info "delete_all start target_version=$TARGET_VERSION app_home=$APP_HOME"
+log_info "delete_all start target_version=$TARGET_VERSION device_version=$DEVICE_VERSION app_home=$APP_HOME"
 stop_pidfile_process "$SEGMENT_WORKER_PID_FILE"
 stop_pidfile_process "$VOICE_PLAYER_PID_FILE"
 stop_pidfile_process "$LISTENER_PID_FILE"

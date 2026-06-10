@@ -119,18 +119,18 @@ restore_board_majestic_config() {
 
 stop_old_processes() {
     # 安装前停止旧版本服务，避免复制文件时仍有脚本在运行。
-    ps w 2>/dev/null | grep "$TARGET_DIR" | grep -E 'encoder_main\.sh|app_service\.sh|voice\.sh|led\.sh' | grep -v grep | while read -r pid _; do
+    ps w 2>/dev/null | grep "$TARGET_DIR" | grep -E 'encoder_main\.sh|app_service\.sh|voice\.sh|led\.sh|start_encoder\.sh' | grep -v grep | while read -r pid _; do
         [ -n "$pid" ] || continue
         kill "$pid" 2>/dev/null
     done
 }
 
-# 主安装流程：找包 -> 解压 -> 停旧进程 -> 清空目标目录 -> 复制 -> 记录脚本安装包版本 -> 检查 majestic。
+# 主安装流程：找包 -> 解压 -> 停旧进程 -> 清空目标目录 -> 复制 -> 检查 majestic。
 print_line "===== GK7205 Encoder Installer ====="
 
 PACKAGE_FILE=$(find_package_file "$1") || {
     print_line "install failed: package not found"
-    print_line "usage: sh install.sh /path/to/V-2.0.tar.gz"
+    print_line "usage: sh install.sh /path/to/V-3.0.0.zip"
     exit 1
 }
 
@@ -176,7 +176,6 @@ restore_board_majestic_config || {
     exit 1
 }
 
-printf '%s\n' "$PACKAGE_VERSION" > "$TARGET_DIR/.installed_package_version"
 rm -rf "$TMP_DIR"
 
 print_line "install success: target=$TARGET_DIR version=$PACKAGE_VERSION"
