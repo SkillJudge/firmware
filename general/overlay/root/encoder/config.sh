@@ -19,7 +19,7 @@ DEVICE_ID=""
 
 if [ -n "$CONFIG_PROCESS_DEVICE_ID" ]; then
     DEVICE_ID="$CONFIG_PROCESS_DEVICE_ID"
-    DEVICE_ID_SOURCE="global-env:DEVICE_ID"
+    DEVICE_ID_SOURCE="${DEVICE_ID_ORIGIN:-global-env:DEVICE_ID}"
     DEVICE_ID_CONFIGURED="true"
     export DEVICE_ID
 fi
@@ -39,7 +39,7 @@ DEVICE_VERSION=$(get_device_version)
 
 # 控制服务的 MQTT 连接参数。
 # 订阅 topic 会绑定当前 DEVICE_ID，因此 device_id 变化后 topic 也会自动变化。
-MQTT_HOST="123.60.51.11" # MQTT 服务器地址。
+MQTT_HOST="192.168.250.100" # MQTT 服务器地址。
 MQTT_PORT="1883" # MQTT 服务器端口。
 MQTT_USER="mqttadmin" # MQTT 登录用户名。
 MQTT_PASS="skilljudge123" # MQTT 登录密码。

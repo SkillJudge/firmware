@@ -20,6 +20,7 @@ START_LOCK_DIR="${START_LOCK_DIR:-${START_STATE_DIR}/start_encoder.lock}"
 START_LOG_DIR="${START_LOG_DIR:-${ENCODER_HOME}/runtime/logs}"
 START_LOG_FILE="${START_LOG_FILE:-${START_LOG_DIR}/encoder_autostart.log}"
 MAIN_PID_FILE="${MAIN_PID_FILE:-${START_STATE_DIR}/encoder_main.pid}"
+FW_PRINTENV_CMD="${FW_PRINTENV_CMD:-fw_printenv}"
 
 log_info() {
     printf '%s [start_encoder.sh] [INFO] %s\n' "$(date '+%F %T')" "$*"
@@ -36,6 +37,29 @@ log_warn() {
 fail() {
     log_error "$*"
     exit 1
+}
+
+load_device_id_from_uboot() {
+    # DEVICE_ID 持久化在 U-Boot 环境中；启动主程序前将它转换成 Linux 进程环境变量。
+    command -v "$FW_PRINTENV_CMD" >/dev/null 2>&1 || {
+        fail "required command missing: $FW_PRINTENV_CMD"
+    }
+
+    uboot_device_id=$("$FW_PRINTENV_CMD" -n DEVICE_ID 2>/dev/null | sed -n '1p' | tr -d '\r\n')
+    [ -n "$uboot_device_id" ] || {
+        fail "DEVICE_ID not found in U-Boot environment: $FW_PRINTENV_CMD -n DEVICE_ID"
+    }
+
+    case "$uboot_device_id" in
+        *[!A-Za-z0-9._-]*)
+            fail "invalid DEVICE_ID from U-Boot environment: $uboot_device_id"
+            ;;
+    esac
+
+    DEVICE_ID="$uboot_device_id"
+    DEVICE_ID_ORIGIN="uboot-env:DEVICE_ID"
+    export DEVICE_ID DEVICE_ID_ORIGIN
+    log_info "DEVICE_ID loaded from U-Boot environment: $DEVICE_ID"
 }
 
 is_pid_running_file() {
@@ -82,11 +106,8 @@ case "$START_DELAY_SEC" in
         ;;
 esac
 
-# DEVICE_ID 缺失时打印告警，但启动脚本继续执行。
-# encoder_main.sh 会按自身规则决定是否允许主程序继续运行。
-if [ -z "${DEVICE_ID:-}" ]; then
-    log_warn "DEVICE_ID is missing: encoder startup will continue"
-fi
+# 自动启动统一从 U-Boot 环境读取设备 ID，再导出给 encoder_main.sh。
+load_device_id_from_uboot
 
 if is_pid_running_file "$MAIN_PID_FILE"; then
     log_info "encoder main already running pid=$(cat "$MAIN_PID_FILE")"

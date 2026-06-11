@@ -16,11 +16,9 @@ ${ROOT_PREFIX}/root/encoder/battery.sh
 ${ROOT_PREFIX}/root/encoder/common.sh
 ${ROOT_PREFIX}/root/encoder/config.sh
 ${ROOT_PREFIX}/root/encoder/config_page.sh
-${ROOT_PREFIX}/root/encoder/delete_all.sh
 ${ROOT_PREFIX}/root/encoder/device_id.sh
 ${ROOT_PREFIX}/root/encoder/encoder_main.sh
 ${ROOT_PREFIX}/root/encoder/feature_engine.sh
-${ROOT_PREFIX}/root/encoder/install.sh
 ${ROOT_PREFIX}/root/encoder/led.sh
 ${ROOT_PREFIX}/root/encoder/mqtt.sh
 ${ROOT_PREFIX}/root/encoder/protocol.sh

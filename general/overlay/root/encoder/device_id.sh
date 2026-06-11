@@ -3,6 +3,17 @@
 # 设备 ID 检查工具。
 # 用于确认当前进程看到的 DEVICE_ID 来源，避免设备注册到错误 topic。
 SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
+
+# 诊断工具直接运行时，优先展示 U-Boot 中持久化的设备 ID。
+if command -v fw_printenv >/dev/null 2>&1; then
+    UBOOT_DEVICE_ID=$(fw_printenv -n DEVICE_ID 2>/dev/null | sed -n '1p' | tr -d '\r\n')
+    if [ -n "$UBOOT_DEVICE_ID" ]; then
+        DEVICE_ID="$UBOOT_DEVICE_ID"
+        DEVICE_ID_ORIGIN="uboot-env:DEVICE_ID"
+        export DEVICE_ID DEVICE_ID_ORIGIN
+    fi
+fi
+
 . "$SCRIPT_DIR/common.sh"
 
 usage() {
@@ -13,7 +24,7 @@ usage:
   sh $APP_HOME/device_id.sh check
 
 examples:
-  export DEVICE_ID=ENC_20260420_001
+  fw_printenv -n DEVICE_ID
   sh $APP_HOME/device_id.sh check
 EOF
 }

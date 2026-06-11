@@ -52,18 +52,13 @@ start() {
         return 1
     fi
 
-    if [ -z "${DEVICE_ID:-}" ]; then
-        echo "encoder startup warning: DEVICE_ID is missing" >&2
-    else
-        echo "encoder startup DEVICE_ID=$DEVICE_ID"
-    fi
-
     if [ ! -f "$START_ENCODER_SCRIPT" ]; then
         echo "encoder startup failed: launcher missing: $START_ENCODER_SCRIPT" >&2
         return 1
     fi
 
-    # 启动器内部还会等待 START_DELAY_SEC，S99 服务本身立即返回，不阻塞后续启动流程。
+    # 启动器会从 U-Boot 环境读取 DEVICE_ID，并在内部等待 START_DELAY_SEC。
+    # S99 服务本身立即返回，不阻塞后续启动流程。
     nohup sh "$START_ENCODER_SCRIPT" > "$START_LOG_FILE" 2>&1 &
     echo "encoder startup scheduled, log=$START_LOG_FILE"
 }
