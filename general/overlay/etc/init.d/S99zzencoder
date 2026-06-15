@@ -3,7 +3,6 @@
 # 编码器开机自启动服务。
 # 文件名排在 S99rc.local 之后，确保网络、系统服务和 rc.local 已经完成启动。
 
-ADD_EXEC_SCRIPT="${ADD_EXEC_SCRIPT:-/root/add_exec.sh}"
 START_ENCODER_SCRIPT="${START_ENCODER_SCRIPT:-/root/encoder/start_encoder.sh}"
 START_LOG_FILE="${START_LOG_FILE:-/tmp/start_encoder.log}"
 JQ_SOURCE_FILE="${JQ_SOURCE_FILE:-/mnt/mmcblk0p1/jq-linux-armhf}"
@@ -36,16 +35,6 @@ stop_pid_file() {
 
 start() {
     echo "Starting encoder controller..."
-
-    if [ ! -f "$ADD_EXEC_SCRIPT" ]; then
-        echo "encoder startup failed: permission script missing: $ADD_EXEC_SCRIPT" >&2
-        return 1
-    fi
-
-    sh "$ADD_EXEC_SCRIPT" || {
-        echo "encoder startup failed: executable permission setup failed" >&2
-        return 1
-    }
 
     if [ ! -f "$JQ_SOURCE_FILE" ]; then
         echo "encoder startup failed: jq source file missing: $JQ_SOURCE_FILE" >&2

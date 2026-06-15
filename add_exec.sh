@@ -14,11 +14,9 @@ firmware/general/overlay/root/encoder/battery.sh
 firmware/general/overlay/root/encoder/common.sh
 firmware/general/overlay/root/encoder/config.sh
 firmware/general/overlay/root/encoder/config_page.sh
-firmware/general/overlay/root/encoder/delete_all.sh
 firmware/general/overlay/root/encoder/device_id.sh
 firmware/general/overlay/root/encoder/encoder_main.sh
 firmware/general/overlay/root/encoder/feature_engine.sh
-firmware/general/overlay/root/encoder/install.sh
 firmware/general/overlay/root/encoder/led.sh
 firmware/general/overlay/root/encoder/mqtt.sh
 firmware/general/overlay/root/encoder/protocol.sh
@@ -26,6 +24,8 @@ firmware/general/overlay/root/encoder/runtime.sh
 firmware/general/overlay/root/encoder/state.sh
 firmware/general/overlay/root/encoder/voice.sh
 firmware/general/overlay/etc/init.d/S40network
+firmware/general/overlay/etc/init.d/S99zzencoder
+firmware/general/overlay/root/encoder/start_encoder.sh
 "
 
 updated_count=0
