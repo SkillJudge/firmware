@@ -73,7 +73,7 @@ print_title "$PROJECT_TITLE Main"
 
 ensure_device_id_configured || exit 1
 
-if ! claim_pidfile "$MAIN_PID_FILE"; then
+if ! claim_pidfile "$MAIN_PID_FILE" "$0"; then
     log_error "encoder main already running"
     exit 1
 fi

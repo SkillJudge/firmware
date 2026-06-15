@@ -188,25 +188,44 @@ get_ip_addr() {
     printf '0.0.0.0\n'
 }
 
+pid_matches_command() {
+    # 除了检查 PID 存活，还可校验命令行，避免重启后旧 PID 被其它进程复用。
+    pid="$1"
+    expected_command="$2"
+
+    case "$pid" in
+        ''|*[!0-9]*)
+            return 1
+            ;;
+    esac
+
+    kill -0 "$pid" 2>/dev/null || return 1
+    [ -n "$expected_command" ] || return 0
+    [ -r "/proc/$pid/cmdline" ] || return 1
+
+    tr '\000' ' ' < "/proc/$pid/cmdline" | grep -F "$expected_command" >/dev/null 2>&1
+}
+
 is_pid_running_file() {
-    # 根据 pidfile 判断进程是否仍然存活。
+    # 根据 pidfile 判断进程是否仍然存活，第二个参数可指定预期命令行。
     pidfile="$1"
+    expected_command="$2"
     [ -f "$pidfile" ] || return 1
 
     pid=$(cat "$pidfile" 2>/dev/null)
-    [ -n "$pid" ] || return 1
 
-    kill -0 "$pid" 2>/dev/null
+    pid_matches_command "$pid" "$expected_command"
 }
 
 claim_pidfile() {
     # 抢占 pidfile。已有活进程时返回失败，避免同类服务重复启动。
     pidfile="$1"
+    expected_command="$2"
     current_pid="$$"
 
     if [ -f "$pidfile" ]; then
         existing_pid=$(cat "$pidfile" 2>/dev/null)
-        if [ -n "$existing_pid" ] && [ "$existing_pid" != "$current_pid" ] && kill -0 "$existing_pid" 2>/dev/null; then
+        if [ "$existing_pid" != "$current_pid" ] && pid_matches_command "$existing_pid" "$expected_command"; then
             return 1
         fi
     fi

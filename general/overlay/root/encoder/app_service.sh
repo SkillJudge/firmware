@@ -255,28 +255,50 @@ service_dispatch() {
 }
 
 service_listener_forever() {
-    # 常驻 MQTT 监听服务。每收到一条消息就 fork 一个 dispatch，避免阻塞订阅循环。
+    # 常驻 MQTT 监听服务。订阅进程通过 FIFO 交给当前 shell 读取，退出时可准确清理。
     ensure_layout
     state_init
     ensure_runtime_files
     ensure_mqtt_tools || exit 1
+    require_command mkfifo || exit 1
 
-    if ! claim_pidfile "$LISTENER_PID_FILE"; then
+    if ! claim_pidfile "$LISTENER_PID_FILE" "$APP_HOME/app_service.sh listener"; then
         log_warn "listener service already running"
         exit 0
     fi
 
-    trap 'release_pidfile_if_owner "$LISTENER_PID_FILE"' EXIT INT TERM
+    listener_fifo="${TMP_DIR}/listener_$$.fifo"
+    listener_sub_pid=""
+
+    service_listener_cleanup() {
+        if [ -n "$listener_sub_pid" ] && kill -0 "$listener_sub_pid" 2>/dev/null; then
+            kill "$listener_sub_pid" 2>/dev/null
+            wait "$listener_sub_pid" 2>/dev/null
+        fi
+        rm -f "$listener_fifo"
+        release_pidfile_if_owner "$LISTENER_PID_FILE"
+    }
+
+    rm -f "$listener_fifo"
+    mkfifo "$listener_fifo" || {
+        release_pidfile_if_owner "$LISTENER_PID_FILE"
+        exit 1
+    }
+
+    trap 'service_listener_cleanup' EXIT INT TERM
     log_info_tag "LIFECYCLE" "listener subscribe topic=$MQTT_SUBSCRIBE_TOPIC"
 
-    mqtt_sub_forever_with_topic "$MQTT_SUBSCRIBE_TOPIC" | while IFS= read -r line; do
+    mqtt_sub_forever_with_topic "$MQTT_SUBSCRIBE_TOPIC" > "$listener_fifo" &
+    listener_sub_pid=$!
+
+    while IFS= read -r line; do
         [ -n "$line" ] || continue
         topic=${line%% *}
         payload=${line#* }
         [ "$topic" != "$line" ] || payload=""
         service_log_mqtt_receive "$topic" "$payload"
         sh "$APP_HOME/app_service.sh" dispatch "$topic" "$payload"
-    done
+    done < "$listener_fifo"
 }
 
 service_segment_worker() {

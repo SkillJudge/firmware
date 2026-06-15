@@ -31,7 +31,7 @@ mqtt_sub_forever_with_topic() {
     # 常驻订阅，-v 会输出 "topic payload"，listener 依赖这个格式拆解消息。
     topic="$1"
 
-    mosquitto_sub \
+    exec mosquitto_sub \
         -h "$MQTT_HOST" \
         -p "$MQTT_PORT" \
         -u "$MQTT_USER" \

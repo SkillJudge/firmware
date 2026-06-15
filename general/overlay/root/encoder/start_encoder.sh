@@ -62,16 +62,29 @@ load_device_id_from_uboot() {
     log_info "DEVICE_ID loaded from U-Boot environment: $DEVICE_ID"
 }
 
-is_pid_running_file() {
-    pid_file="$1"
-    pid=$(cat "$pid_file" 2>/dev/null)
+pid_matches_command() {
+    pid="$1"
+    expected_command="$2"
+
     case "$pid" in
         ''|*[!0-9]*)
             return 1
             ;;
     esac
 
-    kill -0 "$pid" 2>/dev/null
+    kill -0 "$pid" 2>/dev/null || return 1
+    [ -n "$expected_command" ] || return 0
+    [ -r "/proc/$pid/cmdline" ] || return 1
+
+    tr '\000' ' ' < "/proc/$pid/cmdline" | grep -F "$expected_command" >/dev/null 2>&1
+}
+
+is_pid_running_file() {
+    pid_file="$1"
+    expected_command="$2"
+    pid=$(cat "$pid_file" 2>/dev/null)
+
+    pid_matches_command "$pid" "$expected_command"
 }
 
 release_start_lock() {
@@ -89,7 +102,7 @@ claim_start_lock() {
     fi
 
     lock_owner=$(cat "$START_LOCK_DIR/pid" 2>/dev/null)
-    if [ -n "$lock_owner" ] && kill -0 "$lock_owner" 2>/dev/null; then
+    if pid_matches_command "$lock_owner" "$START_ENCODER_SCRIPT"; then
         log_info "startup task already waiting pid=$lock_owner"
         return 2
     fi
@@ -109,7 +122,7 @@ esac
 # 自动启动统一从 U-Boot 环境读取设备 ID，再导出给 encoder_main.sh。
 load_device_id_from_uboot
 
-if is_pid_running_file "$MAIN_PID_FILE"; then
+if is_pid_running_file "$MAIN_PID_FILE" "$ENCODER_MAIN_SCRIPT"; then
     log_info "encoder main already running pid=$(cat "$MAIN_PID_FILE")"
     exit 0
 fi
@@ -134,7 +147,7 @@ log_info "wait ${START_DELAY_SEC}s for board services to become stable"
 sleep "$START_DELAY_SEC"
 
 # 等待期间可能由其它流程启动成功，因此启动前再次检查。
-if is_pid_running_file "$MAIN_PID_FILE"; then
+if is_pid_running_file "$MAIN_PID_FILE" "$ENCODER_MAIN_SCRIPT"; then
     log_info "encoder main already running pid=$(cat "$MAIN_PID_FILE")"
     exit 0
 fi
