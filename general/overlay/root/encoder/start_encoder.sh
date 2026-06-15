@@ -141,9 +141,11 @@ fi
 
 # jq 源文件必须存在。缺失时直接报错，不启动 encoder_main.sh。
 [ -f "$JQ_SOURCE_FILE" ] || fail "jq source file not found: $JQ_SOURCE_FILE"
+log_info "jq source file detected: $JQ_SOURCE_FILE"
 
 # 只补充执行权限，不写死为 755 或 777。
 chmod +x "$JQ_SOURCE_FILE" || fail "cannot add execute permission: $JQ_SOURCE_FILE"
+log_info "jq execute permission ready: $JQ_SOURCE_FILE"
 
 # 如果 /usr/bin/jq 已经是普通文件，拒绝覆盖，避免破坏板子原有程序。
 if [ -e "$JQ_LINK_FILE" ] && [ ! -L "$JQ_LINK_FILE" ]; then
@@ -151,7 +153,10 @@ if [ -e "$JQ_LINK_FILE" ] && [ ! -L "$JQ_LINK_FILE" ]; then
 fi
 
 ln -sfn "$JQ_SOURCE_FILE" "$JQ_LINK_FILE" || fail "cannot create jq symbolic link: $JQ_LINK_FILE"
-"$JQ_LINK_FILE" --version >/dev/null 2>&1 || fail "jq executable check failed: $JQ_LINK_FILE"
+log_info "jq symbolic link ready: $JQ_LINK_FILE -> $JQ_SOURCE_FILE"
+
+jq_version=$("$JQ_LINK_FILE" --version 2>/dev/null) || fail "jq executable check failed: $JQ_LINK_FILE"
+log_info "jq executable check success: path=$JQ_LINK_FILE version=$jq_version"
 
 [ -f "$ENCODER_MAIN_SCRIPT" ] || fail "encoder main script not found: $ENCODER_MAIN_SCRIPT"
 command -v nohup >/dev/null 2>&1 || fail "required command missing: nohup"
