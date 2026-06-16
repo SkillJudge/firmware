@@ -9,23 +9,23 @@ cd "$SCRIPT_DIR" || exit 1
 # 每行填写一个相对于仓库根目录的文件路径，不限制文件扩展名。
 # 后续新增 Shell、Python 脚本或二进制工具时，直接在本清单末尾追加一行即可。
 EXEC_FILES="
-firmware/general/overlay/root/encoder/app_service.sh
-firmware/general/overlay/root/encoder/battery.sh
-firmware/general/overlay/root/encoder/common.sh
-firmware/general/overlay/root/encoder/config.sh
-firmware/general/overlay/root/encoder/config_page.sh
-firmware/general/overlay/root/encoder/device_id.sh
-firmware/general/overlay/root/encoder/encoder_main.sh
-firmware/general/overlay/root/encoder/feature_engine.sh
-firmware/general/overlay/root/encoder/led.sh
-firmware/general/overlay/root/encoder/mqtt.sh
-firmware/general/overlay/root/encoder/protocol.sh
-firmware/general/overlay/root/encoder/runtime.sh
-firmware/general/overlay/root/encoder/state.sh
-firmware/general/overlay/root/encoder/voice.sh
-firmware/general/overlay/etc/init.d/S40network
-firmware/general/overlay/etc/init.d/S99zzencoder
-firmware/general/overlay/root/encoder/start_encoder.sh
+general/overlay/root/encoder/app_service.sh
+general/overlay/root/encoder/battery.sh
+general/overlay/root/encoder/common.sh
+general/overlay/root/encoder/config.sh
+general/overlay/root/encoder/config_page.sh
+general/overlay/root/encoder/device_id.sh
+general/overlay/root/encoder/encoder_main.sh
+general/overlay/root/encoder/feature_engine.sh
+general/overlay/root/encoder/led.sh
+general/overlay/root/encoder/mqtt.sh
+general/overlay/root/encoder/protocol.sh
+general/overlay/root/encoder/runtime.sh
+general/overlay/root/encoder/state.sh
+general/overlay/root/encoder/voice.sh
+general/overlay/etc/init.d/S40network
+general/overlay/etc/init.d/S99zzencoder
+general/overlay/root/encoder/start_encoder.sh
 "
 
 updated_count=0
