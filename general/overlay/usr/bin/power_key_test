@@ -1,0 +1,58 @@
+#!/bin/sh
+I2C_BUS=1
+I2C_ADDR=0x20
+PROTECT_MASK=$(( (1<<0) | (1<<1) | (1<<2) ))
+
+read_reg() {
+    local raw=$(i2cget -y $I2C_BUS $I2C_ADDR 2>/dev/null)
+    echo $((raw))
+}
+
+write_reg() {
+    local val=$1
+    i2cset -y $I2C_BUS $I2C_ADDR 0x$(printf "%02x" $val) >/dev/null 2>&1
+}
+
+# 安全恢复：P0 P1 P2强制高电平
+restore_power_pin() {
+    local cur=$(read_reg)
+    local safe_val=$(( cur | PROTECT_MASK ))
+    write_reg $safe_val
+    echo "已恢复P0/P1/P2为高电平，软关机引脚正常"
+}
+
+# 临时拉低P2 N秒，模拟按键按下
+test_power_shutdown() {
+    local hold_sec=${1:-2}
+    local cur=$(read_reg)
+    echo "当前寄存器值: 0x$(printf "%02x" $cur)"
+    echo "准备拉低P2引脚${hold_sec}秒，触发软关机检测..."
+
+    # 临时取消保护，拉低P2
+    local temp_val=$(( cur & ~(1 << 2) )) # 00000100
+    write_reg $temp_val
+
+    sleep $hold_sec
+    # 超时自动恢复高电平，防止一直关机
+    restore_power_pin
+}
+
+case "$1" in
+hold)
+    test_power_shutdown $2
+    ;;
+restore)
+    restore_power_pin
+    ;;
+read)
+    val=$(read_reg)
+    printf "P2当前电平: %d\n" $(((val >> 2) & 1))
+    ;;
+*)
+    echo "用法："
+    echo "  $0 read        查看P2当前电平"
+    echo "  $0 hold 3      拉低P2保持3秒，模拟关机按键"
+    echo "  $0 restore     强制恢复P2高电平"
+    exit 1
+    ;;
+esac

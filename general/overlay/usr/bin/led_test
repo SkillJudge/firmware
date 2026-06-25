@@ -1,0 +1,186 @@
+#!/bin/sh
+
+# 硬件配置（根据你i2cdetect结果固定）
+I2C_BUS=1
+I2C_ADDR=0x20
+
+# PCF8574引脚分配
+# P0:CHRG  P1:STDBY  P2:软关机(必须永久高电平)
+# P3:LED1  P4:LED2A  P5:LED2B
+LED1_MASK=$((1 << 3))
+LED2A_MASK=$((1 << 4))
+LED2B_MASK=$((1 << 5))
+
+# 保护掩码：P0 P1 P2 强制永远置1，禁止被拉低
+PROTECT_MASK=$(( (1<<0) | (1<<1) | (1<<2) ))
+
+# 读取PCF8574当前寄存器值
+read_pcf8574() {
+    local raw
+    raw=$(i2cget -y "$I2C_BUS" "$I2C_ADDR" 2>/dev/null)
+    if [ -z "$raw" ]; then
+        echo "错误：读取I2C设备0x20失败"
+        exit 1
+    fi
+    echo $((raw))
+}
+
+# 写入寄存器，强制保留P0/P1/P2为高电平
+write_pcf8574() {
+    local val="$1"
+    # 强制保护位全部置1，杜绝误拉低关机引脚
+    val=$(( val | PROTECT_MASK ))
+    i2cset -y "$I2C_BUS" "$I2C_ADDR" "0x$(printf "%02x" $val)" >/dev/null 2>&1
+}
+
+# 点亮指定LED
+led_on() {
+    local mask="$1"
+    local cur=$(read_pcf8574)
+    local new=$(( cur | mask ))
+    write_pcf8574 "$new"
+}
+
+# 熄灭指定LED
+led_off() {
+    local mask="$1"
+    local cur=$(read_pcf8574)
+    local new=$(( cur & (~mask) ))
+    write_pcf8574 "$new"
+}
+
+# 全部LED熄灭
+all_led_off() {
+    local cur=$(read_pcf8574)
+    local new=$(( cur & ~(LED1_MASK | LED2A_MASK | LED2B_MASK) ))
+    write_pcf8574 "$new"
+    echo "所有LED已熄灭"
+}
+
+# 全部LED点亮
+all_led_on() {
+    local cur=$(read_pcf8574)
+    local new=$(( cur | LED1_MASK | LED2A_MASK | LED2B_MASK ))
+    write_pcf8574 "$new"
+    echo "所有LED已点亮"
+}
+
+# 读取寄存器并打印所有引脚状态
+read_status() {
+    local val=$(read_pcf8574)
+    printf "PCF8574 寄存器值: 0x%02X\n" "$val"
+    echo "P0 CHRG:    $(( (val >> 0) & 1 ))"
+    echo "P1 STDBY:   $(( (val >> 1) & 1 ))"
+    echo "P2 POWER:   $(( (val >> 2) & 1 ))"
+    echo "P3 LED1:    $(( (val >> 3) & 1 ))"
+    echo "P4 LED2A:   $(( (val >> 4) & 1 ))"
+    echo "P5 LED2B:   $(( (val >> 5) & 1 ))"
+    echo "P6:         $(( (val >> 6) & 1 ))"
+    echo "P7:         $(( (val >> 7) & 1 ))"
+}
+
+# 流水灯测试
+flow_test() {
+    echo "=== 流水灯测试 Ctrl+C 退出 ==="
+    all_led_off
+    while true; do
+        led_on $LED1_MASK
+        echo "LED1 ON"
+        sleep 1
+        led_off $LED1_MASK
+
+        led_on $LED2A_MASK
+        echo "LED2A ON"
+        sleep 1
+        led_off $LED2A_MASK
+
+        led_on $LED2B_MASK
+        echo "LED2B ON"
+        sleep 1
+        led_off $LED2B_MASK
+    done
+}
+
+# 双色LED循环测试
+dual_led_test() {
+    echo "=== 双色LED测试 Ctrl+C 退出 ==="
+    all_led_off
+    while true; do
+        led_on $LED2A_MASK
+        echo "LED2A 亮"
+        sleep 1
+        led_off $LED2A_MASK
+
+        led_on $LED2B_MASK
+        echo "LED2B 亮"
+        sleep 1
+        led_off $LED2B_MASK
+
+        led_on $LED2A_MASK
+        led_on $LED2B_MASK
+        echo "LED2A+LED2B 同时亮"
+        sleep 1
+        all_led_off
+    done
+}
+
+# 帮助
+usage() {
+cat <<EOF
+使用示例：
+  $0 read        读取所有引脚电平状态
+  $0 led1_on     打开LED1
+  $0 led1_off    关闭LED1
+  $0 led2a_on    打开LED2A
+  $0 led2a_off   关闭LED2A
+  $0 led2b_on    打开LED2B
+  $0 led2b_off   关闭LED2B
+  $0 all_on      全部LED打开
+  $0 all_off     全部LED关闭
+  $0 flow        流水灯循环
+  $0 dual        双色LED循环
+EOF
+}
+
+case "$1" in
+read)
+    read_status
+    ;;
+led1_on)
+    led_on $LED1_MASK
+    ;;
+led1_off)
+    led_off $LED1_MASK
+    ;;
+led2a_on)
+    led_on $LED2A_MASK
+    ;;
+led2a_off)
+    led_off $LED2A_MASK
+    ;;
+led2b_on)
+    led_on $LED2B_MASK
+    ;;
+led2b_off)
+    led_off $LED2B_MASK
+    ;;
+all_on)
+    all_led_on
+    ;;
+all_off)
+    all_led_off
+    ;;
+flow)
+    flow_test
+    ;;
+dual)
+    dual_led_test
+    ;;
+*)
+    usage
+    exit 1
+    ;;
+esac
+
+
+
