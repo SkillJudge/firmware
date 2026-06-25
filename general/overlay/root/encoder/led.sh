@@ -54,6 +54,8 @@ led_read_value() {
 }
 
 led_write_value() {
+    # 强制 P0 P1 P2 bit0/1/2 恒为1，禁止输出低电平
+    local safe_val=$(( $1 | 0x07 ))
     led_hex=$(printf '0x%02x' "$1")
     i2cset -y "$LED_I2C_BUS" "$LED_I2C_ADDR" "$led_hex" >/dev/null 2>&1
 }

@@ -26,6 +26,13 @@ general/overlay/root/encoder/voice.sh
 general/overlay/etc/init.d/S40network
 general/overlay/etc/init.d/S99zzencoder
 general/overlay/root/encoder/start_encoder.sh
+
+general/overlay/etc/init.d/S15_i2c_init
+general/overlay/etc/init.d/S99ircut_day
+general/overlay/usr/bin/ftp_upgrade
+general/overlay/usr/bin/led_test
+general/overlay/usr/bin/power_key_test
+
 "
 
 updated_count=0
