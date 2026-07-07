@@ -10,8 +10,12 @@ START_DELAY_SEC="${START_DELAY_SEC:-10}"
 ENCODER_HOME="${ENCODER_HOME:-/root/encoder}"
 ENCODER_MAIN_SCRIPT="${ENCODER_MAIN_SCRIPT:-${ENCODER_HOME}/encoder_main.sh}"
 
-# jq 工具存放在 TF 卡中，启动前为它补充执行权限并建立系统软连接。
-JQ_SOURCE_FILE="${JQ_SOURCE_FILE:-/mnt/mmcblk0p1/jq-linux-armhf}"
+# jq 优先使用板载压缩包，启动时解压到内存盘；TF 卡中的文件仅作为兼容回退。
+JQ_SOURCE_FILE="${JQ_SOURCE_FILE:-}"
+JQ_PACKED_FILE="${JQ_PACKED_FILE:-${ENCODER_HOME}/bin/jq-linux-armhf.gz}"
+JQ_TF_SOURCE_FILE="${JQ_TF_SOURCE_FILE:-/mnt/mmcblk0p1/jq-linux-armhf}"
+JQ_RUNTIME_DIR="${JQ_RUNTIME_DIR:-/tmp/encoder-tools}"
+JQ_RUNTIME_FILE="${JQ_RUNTIME_FILE:-${JQ_RUNTIME_DIR}/jq}"
 JQ_LINK_FILE="${JQ_LINK_FILE:-/usr/bin/jq}"
 
 # 启动锁用于避免重复创建等待任务。
@@ -113,6 +117,56 @@ claim_start_lock() {
     printf '%s\n' "$$" > "$START_LOCK_DIR/pid"
 }
 
+prepare_jq() {
+    if [ -n "$JQ_SOURCE_FILE" ] && [ -f "$JQ_SOURCE_FILE" ]; then
+        jq_source="$JQ_SOURCE_FILE"
+        log_info "using configured jq source: $jq_source"
+    elif [ -f "$JQ_PACKED_FILE" ]; then
+        command -v gzip >/dev/null 2>&1 || fail "required command missing: gzip"
+        mkdir -p "$JQ_RUNTIME_DIR" || fail "cannot create jq runtime directory: $JQ_RUNTIME_DIR"
+
+        jq_tmp="${JQ_RUNTIME_FILE}.tmp.$$"
+        rm -f "$jq_tmp"
+        gzip -dc "$JQ_PACKED_FILE" > "$jq_tmp" || {
+            rm -f "$jq_tmp"
+            fail "cannot unpack board jq package: $JQ_PACKED_FILE"
+        }
+        chmod +x "$jq_tmp" || {
+            rm -f "$jq_tmp"
+            fail "cannot add execute permission: $jq_tmp"
+        }
+        mv -f "$jq_tmp" "$JQ_RUNTIME_FILE" || {
+            rm -f "$jq_tmp"
+            fail "cannot install runtime jq: $JQ_RUNTIME_FILE"
+        }
+
+        jq_source="$JQ_RUNTIME_FILE"
+        log_info "board jq package unpacked: $JQ_PACKED_FILE -> $jq_source"
+    elif [ -f "$JQ_TF_SOURCE_FILE" ]; then
+        jq_source="$JQ_TF_SOURCE_FILE"
+        log_warn "board jq package missing, using TF card fallback: $jq_source"
+    else
+        fail "jq source not found: board=$JQ_PACKED_FILE tf=$JQ_TF_SOURCE_FILE"
+    fi
+
+    chmod +x "$jq_source" || fail "cannot add execute permission: $jq_source"
+
+    # 如果 /usr/bin/jq 已经是普通文件，直接校验并使用系统现有版本。
+    if [ -e "$JQ_LINK_FILE" ] && [ ! -L "$JQ_LINK_FILE" ]; then
+        jq_version=$("$JQ_LINK_FILE" --version 2>/dev/null) ||
+            fail "existing jq executable check failed: $JQ_LINK_FILE"
+        log_info "existing jq executable ready: path=$JQ_LINK_FILE version=$jq_version"
+        return 0
+    fi
+
+    ln -sfn "$jq_source" "$JQ_LINK_FILE" ||
+        fail "cannot create jq symbolic link: $JQ_LINK_FILE"
+
+    jq_version=$("$JQ_LINK_FILE" --version 2>/dev/null) ||
+        fail "jq executable check failed: $JQ_LINK_FILE"
+    log_info "jq executable ready: path=$JQ_LINK_FILE source=$jq_source version=$jq_version"
+}
+
 case "$START_DELAY_SEC" in
     ''|*[!0-9]*)
         fail "START_DELAY_SEC must be a non-negative integer: $START_DELAY_SEC"
@@ -152,24 +206,7 @@ if is_pid_running_file "$MAIN_PID_FILE" "$ENCODER_MAIN_SCRIPT"; then
     exit 0
 fi
 
-# jq 源文件必须存在。缺失时直接报错，不启动 encoder_main.sh。
-[ -f "$JQ_SOURCE_FILE" ] || fail "jq source file not found: $JQ_SOURCE_FILE"
-log_info "jq source file detected: $JQ_SOURCE_FILE"
-
-# 只补充执行权限，不写死为 755 或 777。
-chmod +x "$JQ_SOURCE_FILE" || fail "cannot add execute permission: $JQ_SOURCE_FILE"
-log_info "jq execute permission ready: $JQ_SOURCE_FILE"
-
-# 如果 /usr/bin/jq 已经是普通文件，拒绝覆盖，避免破坏板子原有程序。
-if [ -e "$JQ_LINK_FILE" ] && [ ! -L "$JQ_LINK_FILE" ]; then
-    fail "jq link target exists and is not a symbolic link: $JQ_LINK_FILE"
-fi
-
-ln -sfn "$JQ_SOURCE_FILE" "$JQ_LINK_FILE" || fail "cannot create jq symbolic link: $JQ_LINK_FILE"
-log_info "jq symbolic link ready: $JQ_LINK_FILE -> $JQ_SOURCE_FILE"
-
-jq_version=$("$JQ_LINK_FILE" --version 2>/dev/null) || fail "jq executable check failed: $JQ_LINK_FILE"
-log_info "jq executable check success: path=$JQ_LINK_FILE version=$jq_version"
+prepare_jq
 
 [ -f "$ENCODER_MAIN_SCRIPT" ] || fail "encoder main script not found: $ENCODER_MAIN_SCRIPT"
 command -v nohup >/dev/null 2>&1 || fail "required command missing: nohup"

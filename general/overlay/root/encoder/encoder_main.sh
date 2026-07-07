@@ -81,7 +81,7 @@ fi
 trap 'exit 0' INT TERM
 trap 'cleanup_main' EXIT
 
-# While the controller is running, an all-off board means idle and ready for commands.
+# While the controller is running, a steady green LED means idle and ready for commands.
 led_runtime_start
 
 log_info_tag "LIFECYCLE" "encoder main start device_id=$DEVICE_ID version=$DEVICE_VERSION"

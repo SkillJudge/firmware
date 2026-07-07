@@ -64,8 +64,14 @@ CURL_UPLOAD_MAX_TIME_SEC="60" # 单个文件 FTP 上传最长执行时间。
 BATTERY_REFRESH_ENABLED="true" # 是否在每次心跳前读取真实电量与充电状态。
 BATTERY_I2C_BUS="1" # 库仑计 I2C 总线编号。
 BATTERY_I2C_ADDR="0x36" # 库仑计 I2C 地址。
+BATTERY_VCELL_REG="0x02" # VCELL 电池电压寄存器。
 BATTERY_SOC_REG="0x04" # SOC 电量百分比寄存器。
 BATTERY_CRATE_REG="0x16" # CRATE 充放电速率寄存器。
+BATTERY_CHARGE_GPIO_I2C_BUS="1" # 充电状态 GPIO 扩展器 I2C 总线编号。
+BATTERY_CHARGE_GPIO_I2C_ADDR="0x20" # 充电状态 GPIO 扩展器地址。
+BATTERY_CHRG_GPIO_MASK="0x01" # CHRG 状态输入掩码，对应 PCF8574 P0，需结合 STDBY 判断。
+BATTERY_STDBY_GPIO_MASK="0x02" # STDBY 状态输入掩码，对应 PCF8574 P1，需结合 CHRG 判断。
+BATTERY_PROTECT_GPIO_MASK="0x07" # 读取充电状态前释放 P0/P1/P2，避免锁存低电平误判或触发软关机。
 BATTERY_CHARGING_THRESHOLD_RAW="5" # 大于等于该值时判定为正在充电。
 BATTERY_DISCHARGING_THRESHOLD_RAW="-5" # 小于等于该值时判定为正在放电。
 

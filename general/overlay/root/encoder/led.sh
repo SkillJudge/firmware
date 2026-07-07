@@ -3,8 +3,9 @@
 SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$SCRIPT_DIR/state.sh"
 
-# Only these three bits belong to LEDs. Preserve every other expander bit.
+# Only these three bits belong to LEDs. Release every other expander bit high.
 LED_CONTROL_MASK=$((LED_MONO_MASK | LED_STREAM_MASK | LED_UPLOAD_MASK))
+LED_RELEASE_MASK=$((255 & ~LED_CONTROL_MASK))
 LED_UPLOAD_TOKEN=""
 
 led_require_i2c_tools() {
@@ -54,8 +55,7 @@ led_read_value() {
 }
 
 led_write_value() {
-    # 强制 P0 P1 P2 bit0/1/2 恒为1，禁止输出低电平
-    local safe_val=$(( $1 | 0x07 ))
+    safe_val=$(( ($1 | LED_RELEASE_MASK) & 255 ))
     led_hex=$(printf '0x%02x' "$safe_val")
     i2cset -y "$LED_I2C_BUS" "$LED_I2C_ADDR" "$led_hex" >/dev/null 2>&1
 }
@@ -75,7 +75,9 @@ led_update_bits() {
     led_rc=$?
 
     if [ "$led_rc" = "0" ]; then
-        led_next=$(( (led_current | led_set_mask) & (~led_clear_mask & 255) ))
+        led_set_mask=$((led_set_mask & LED_CONTROL_MASK))
+        led_clear_mask=$((led_clear_mask & LED_CONTROL_MASK))
+        led_next=$(( (((led_current & LED_CONTROL_MASK) | led_set_mask) & (~led_clear_mask & LED_CONTROL_MASK)) | LED_RELEASE_MASK ))
         if [ "$led_next" != "$led_current" ]; then
             led_write_value "$led_next"
             led_rc=$?
@@ -98,6 +100,7 @@ led_record_on() { led_update_bits "$LED_MONO_MASK" 0; }
 led_record_off() { led_update_bits 0 "$LED_MONO_MASK"; }
 led_upload_on() { led_update_bits "$LED_UPLOAD_MASK" 0; }
 led_upload_off() { led_update_bits 0 "$LED_UPLOAD_MASK"; }
+led_idle_on() { led_update_bits "$LED_UPLOAD_MASK" "$((LED_MONO_MASK | LED_STREAM_MASK))"; }
 
 led_upload_tokens_prepare() {
     ensure_layout
@@ -136,6 +139,19 @@ led_upload_prune_expired_tokens() {
     done
 }
 
+led_idle_indicator_sync() {
+    led_upload_prune_expired_tokens
+    if led_upload_has_tokens; then
+        return 0
+    fi
+
+    if [ "$(state_get_publishing)" = "true" ] || [ "$(state_get_recording)" = "true" ]; then
+        led_upload_off
+    else
+        led_upload_on
+    fi
+}
+
 led_upload_blink_worker() {
     led_upload_tokens_prepare
     if ! claim_pidfile "$LED_UPLOAD_BLINK_PID_FILE"; then
@@ -154,7 +170,7 @@ led_upload_blink_worker() {
             led_upload_off
             sleep "$LED_UPLOAD_OFF_SEC"
         else
-            led_upload_off
+            led_idle_indicator_sync
             sleep "$LED_IDLE_POLL_SEC"
         fi
     done
@@ -177,6 +193,7 @@ led_sync_business_state() {
     fi
 
     led_update_bits "$led_set_mask" "$led_clear_mask"
+    led_idle_indicator_sync
 }
 
 led_sync_business_after_delay() {
@@ -252,20 +269,20 @@ led_upload_end() {
 
     led_upload_prune_expired_tokens
     if ! led_upload_has_tokens; then
-        led_upload_off || true
+        led_idle_indicator_sync || true
     fi
 }
 
 led_runtime_start() {
     led_upload_tokens_clear
-    led_all_off
+    led_idle_on
     led_upload_worker_start
 }
 
 led_runtime_reset_idle() {
     stop_pidfile_process "$LED_UPLOAD_BLINK_PID_FILE"
     led_upload_tokens_clear
-    led_all_off
+    led_idle_on
     led_upload_worker_start
 }
 
@@ -285,11 +302,12 @@ if [ "$(basename "$0")" = "led.sh" ]; then
         record_off) led_record_off ;;
         upload_on) led_upload_on ;;
         upload_off) led_upload_off ;;
+        idle_on) led_idle_on ;;
         upload_blink_worker) led_upload_blink_worker ;;
         sync_business) led_sync_business_state ;;
         sync_business_after_delay) led_sync_business_after_delay ;;
         *)
-            echo "usage: sh led.sh {all_on|all_off|stream_on|stream_off|record_on|record_off|upload_on|upload_off|upload_blink_worker|sync_business|sync_business_after_delay}" >&2
+            echo "usage: sh led.sh {all_on|all_off|stream_on|stream_off|record_on|record_off|upload_on|upload_off|idle_on|upload_blink_worker|sync_business|sync_business_after_delay}" >&2
             exit 1
             ;;
     esac
