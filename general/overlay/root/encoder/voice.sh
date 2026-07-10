@@ -5,7 +5,8 @@ SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 
 # 桌牌识别语音配置。后续调整播放次数或播报间隔时，只需要修改这里。
 # desk_8k.pcm 是 8kHz 的原始 PCM 文件，当前语音长度约 5.6 秒。
-VOICE_DESK_PCM_FILE="${VOICE_DESK_PCM_FILE:-/mnt/mmcblk0p1/desk_8k.pcm}" # 桌牌识别语音 PCM 文件。
+RESOURCE_DIR="${RESOURCE_DIR:-/root/resources}" # 固件内置资源目录。
+VOICE_DESK_PCM_FILE="${VOICE_DESK_PCM_FILE:-${RESOURCE_DIR}/desk_8k.pcm}" # 桌牌识别语音 PCM 文件。
 VOICE_PLAY_URL="${VOICE_PLAY_URL:-http://127.0.0.1/play_audio}" # Majestic 本地语音播放接口。
 VOICE_REPEAT_COUNT="${VOICE_REPEAT_COUNT:-3}" # 一次指令重复播报次数。
 VOICE_AUDIO_DURATION_SEC="${VOICE_AUDIO_DURATION_SEC:-6}" # 单次语音播放预留时长，应覆盖完整 PCM 时长。

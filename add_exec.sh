@@ -32,7 +32,7 @@ general/overlay/etc/init.d/S99ircut_day
 general/overlay/usr/bin/ftp_upgrade
 general/overlay/usr/bin/led_test
 general/overlay/usr/bin/power_key_test
-general/overlay/usr/bin/jq
+general/overlay/root/resources/jq
 
 "
 

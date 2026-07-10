@@ -5,7 +5,8 @@
 
 START_ENCODER_SCRIPT="${START_ENCODER_SCRIPT:-/root/encoder/start_encoder.sh}"
 START_LOG_FILE="${START_LOG_FILE:-/tmp/start_encoder.log}"
-JQ_SOURCE_FILE="${JQ_SOURCE_FILE:-/mnt/mmcblk0p1/jq-linux-armhf}"
+RESOURCE_DIR="${RESOURCE_DIR:-/root/resources}"
+JQ_BINARY_FILE="${JQ_BINARY_FILE:-${RESOURCE_DIR}/jq}"
 STATE_DIR="${STATE_DIR:-/root/encoder/runtime/state}"
 START_LOCK_DIR="${START_LOCK_DIR:-${STATE_DIR}/start_encoder.lock}"
 MAIN_PID_FILE="${MAIN_PID_FILE:-${STATE_DIR}/encoder_main.pid}"
@@ -36,8 +37,8 @@ stop_pid_file() {
 start() {
     echo "Starting encoder controller..."
 
-    if [ ! -f "$JQ_SOURCE_FILE" ]; then
-        echo "encoder startup failed: jq source file missing: $JQ_SOURCE_FILE" >&2
+    if [ ! -f "$JQ_BINARY_FILE" ]; then
+        echo "encoder startup failed: jq file missing: $JQ_BINARY_FILE" >&2
         return 1
     fi
 
@@ -48,6 +49,7 @@ start() {
 
     # 启动器会从 U-Boot 环境读取 DEVICE_ID，并在内部等待 START_DELAY_SEC。
     # S99 服务本身立即返回，不阻塞后续启动流程。
+    export RESOURCE_DIR JQ_BINARY_FILE
     nohup sh "$START_ENCODER_SCRIPT" > "$START_LOG_FILE" 2>&1 &
     echo "encoder startup scheduled, log=$START_LOG_FILE"
 }

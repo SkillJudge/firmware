@@ -10,13 +10,9 @@ START_DELAY_SEC="${START_DELAY_SEC:-10}"
 ENCODER_HOME="${ENCODER_HOME:-/root/encoder}"
 ENCODER_MAIN_SCRIPT="${ENCODER_MAIN_SCRIPT:-${ENCODER_HOME}/encoder_main.sh}"
 
-# jq 优先使用板载压缩包，启动时解压到内存盘；TF 卡中的文件仅作为兼容回退。
-JQ_SOURCE_FILE="${JQ_SOURCE_FILE:-}"
-JQ_PACKED_FILE="${JQ_PACKED_FILE:-${ENCODER_HOME}/bin/jq-linux-armhf.gz}"
-JQ_TF_SOURCE_FILE="${JQ_TF_SOURCE_FILE:-/mnt/mmcblk0p1/jq-linux-armhf}"
-JQ_RUNTIME_DIR="${JQ_RUNTIME_DIR:-/tmp/encoder-tools}"
-JQ_RUNTIME_FILE="${JQ_RUNTIME_FILE:-${JQ_RUNTIME_DIR}/jq}"
-JQ_LINK_FILE="${JQ_LINK_FILE:-/usr/bin/jq}"
+# 固件内置资源目录。jq 放在这里，启动时把该目录放到 PATH 前面供协议脚本调用。
+RESOURCE_DIR="${RESOURCE_DIR:-/root/resources}"
+JQ_BINARY_FILE="${JQ_BINARY_FILE:-${RESOURCE_DIR}/jq}"
 
 # 启动锁用于避免重复创建等待任务。
 START_STATE_DIR="${START_STATE_DIR:-${ENCODER_HOME}/runtime/state}"
@@ -118,53 +114,30 @@ claim_start_lock() {
 }
 
 prepare_jq() {
-    if [ -n "$JQ_SOURCE_FILE" ] && [ -f "$JQ_SOURCE_FILE" ]; then
-        jq_source="$JQ_SOURCE_FILE"
-        log_info "using configured jq source: $jq_source"
-    elif [ -f "$JQ_PACKED_FILE" ]; then
-        command -v gzip >/dev/null 2>&1 || fail "required command missing: gzip"
-        mkdir -p "$JQ_RUNTIME_DIR" || fail "cannot create jq runtime directory: $JQ_RUNTIME_DIR"
+    [ -f "$JQ_BINARY_FILE" ] || fail "jq file not found: $JQ_BINARY_FILE"
+    [ -x "$JQ_BINARY_FILE" ] || chmod +x "$JQ_BINARY_FILE" ||
+        fail "cannot add execute permission: $JQ_BINARY_FILE"
 
-        jq_tmp="${JQ_RUNTIME_FILE}.tmp.$$"
-        rm -f "$jq_tmp"
-        gzip -dc "$JQ_PACKED_FILE" > "$jq_tmp" || {
-            rm -f "$jq_tmp"
-            fail "cannot unpack board jq package: $JQ_PACKED_FILE"
-        }
-        chmod +x "$jq_tmp" || {
-            rm -f "$jq_tmp"
-            fail "cannot add execute permission: $jq_tmp"
-        }
-        mv -f "$jq_tmp" "$JQ_RUNTIME_FILE" || {
-            rm -f "$jq_tmp"
-            fail "cannot install runtime jq: $JQ_RUNTIME_FILE"
-        }
+    jq_dir=$(CDPATH= cd "$(dirname "$JQ_BINARY_FILE")" && pwd) ||
+        fail "cannot resolve jq directory: $JQ_BINARY_FILE"
 
-        jq_source="$JQ_RUNTIME_FILE"
-        log_info "board jq package unpacked: $JQ_PACKED_FILE -> $jq_source"
-    elif [ -f "$JQ_TF_SOURCE_FILE" ]; then
-        jq_source="$JQ_TF_SOURCE_FILE"
-        log_warn "board jq package missing, using TF card fallback: $jq_source"
-    else
-        fail "jq source not found: board=$JQ_PACKED_FILE tf=$JQ_TF_SOURCE_FILE"
-    fi
+    case ":$PATH:" in
+        *:"$jq_dir":*)
+            ;;
+        *)
+            PATH="$jq_dir:$PATH"
+            export PATH
+            ;;
+    esac
 
-    chmod +x "$jq_source" || fail "cannot add execute permission: $jq_source"
+    jq_command=$(command -v jq 2>/dev/null) ||
+        fail "jq command not found after PATH update: $jq_dir"
+    [ "$jq_command" = "$jq_dir/jq" ] ||
+        fail "jq command path mismatch: command=$jq_command expected=$jq_dir/jq"
 
-    # 如果 /usr/bin/jq 已经是普通文件，直接校验并使用系统现有版本。
-    if [ -e "$JQ_LINK_FILE" ] && [ ! -L "$JQ_LINK_FILE" ]; then
-        jq_version=$("$JQ_LINK_FILE" --version 2>/dev/null) ||
-            fail "existing jq executable check failed: $JQ_LINK_FILE"
-        log_info "existing jq executable ready: path=$JQ_LINK_FILE version=$jq_version"
-        return 0
-    fi
-
-    ln -sfn "$jq_source" "$JQ_LINK_FILE" ||
-        fail "cannot create jq symbolic link: $JQ_LINK_FILE"
-
-    jq_version=$("$JQ_LINK_FILE" --version 2>/dev/null) ||
-        fail "jq executable check failed: $JQ_LINK_FILE"
-    log_info "jq executable ready: path=$JQ_LINK_FILE source=$jq_source version=$jq_version"
+    jq_version=$(jq --version 2>/dev/null) ||
+        fail "jq executable check failed: $JQ_BINARY_FILE"
+    log_info "jq executable ready: path=$JQ_BINARY_FILE version=$jq_version"
 }
 
 case "$START_DELAY_SEC" in
