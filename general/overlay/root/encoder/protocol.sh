@@ -124,7 +124,8 @@ protocol_build_heartbeat_payload() {
         --argjson is_charging "$(state_get_charging)" \
         --argjson signal "$(state_get_signal)" \
         --argjson battery "$(state_get_battery)" \
-        '{msgId:$msgId,msg:"heartbeat",data:{is_idle:$is_idle,is_recording:$is_recording,is_publishing:$is_publishing,is_charging:$is_charging,version:$version,signal:$signal,battery:$battery}}'
+        --argjson voltage_mv "$(state_get_battery_voltage_mv)" \
+        '{msgId:$msgId,msg:"heartbeat",data:{is_idle:$is_idle,is_recording:$is_recording,is_publishing:$is_publishing,is_charging:$is_charging,version:$version,signal:$signal,battery:$battery,voltage_mv:$voltage_mv}}'
 }
 
 protocol_parse_topic() {

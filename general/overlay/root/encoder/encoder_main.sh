@@ -3,8 +3,7 @@
 # 编码器主入口脚本。
 # 负责初始化运行目录/状态、完成注册、启动心跳与 MQTT 监听，并在后台服务异常退出时拉起。
 SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
-. "$SCRIPT_DIR/state.sh"
-. "$SCRIPT_DIR/led.sh"
+. "$SCRIPT_DIR/feature_engine.sh"
 
 # 日志镜像 tail 进程的 PID。主进程退出时需要一起清理，避免残留后台进程。
 LOG_TAIL_PID=""
@@ -80,6 +79,8 @@ fi
 
 trap 'exit 0' INT TERM
 trap 'cleanup_main' EXIT
+
+feature_restore_startup_media || log_warn_tag "LIFECYCLE" "startup Majestic restore failed, continue controller startup"
 
 # While the controller is running, a steady green LED means idle and ready for commands.
 led_runtime_start

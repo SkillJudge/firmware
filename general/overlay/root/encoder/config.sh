@@ -5,6 +5,19 @@
 APP_HOME=$(CDPATH= cd "$(dirname "$0")" && pwd) # 当前脚本安装目录，自动计算。
 INSTALL_TARGET="/root/encoder" # 安装脚本写入板子的目标目录。
 
+# 固件内置工具和语音资源目录。所有入口脚本都会加载 config.sh，因此在这里统一补齐 PATH，
+# 避免直接执行 encoder_main.sh/app_service.sh 时因绕过 start_encoder.sh 而找不到 jq。
+RESOURCE_DIR="${RESOURCE_DIR:-/root/resources}"
+JQ_BINARY_FILE="${JQ_BINARY_FILE:-${RESOURCE_DIR}/jq}"
+case ":${PATH:-}:" in
+    *:"$RESOURCE_DIR":*)
+        ;;
+    *)
+        PATH="${RESOURCE_DIR}:${PATH:-/usr/sbin:/usr/bin:/sbin:/bin}"
+        ;;
+esac
+export RESOURCE_DIR JQ_BINARY_FILE PATH
+
 # 页面和终端标题。
 PROJECT_TITLE="GK7205 Encoder Full Script Controller" # 主程序终端标题。
 CONFIG_PAGE_TITLE="GK7205 Encoder Config Page" # 配置页终端标题。
@@ -74,6 +87,10 @@ BATTERY_STDBY_GPIO_MASK="0x02" # STDBY 状态输入掩码，对应 PCF8574 P1，
 BATTERY_PROTECT_GPIO_MASK="0x07" # 读取充电状态前释放 P0/P1/P2，避免锁存低电平误判或触发软关机。
 BATTERY_CHARGING_THRESHOLD_RAW="5" # 大于等于该值时判定为正在充电。
 BATTERY_DISCHARGING_THRESHOLD_RAW="-5" # 小于等于该值时判定为正在放电。
+BATTERY_LOW_SHUTDOWN_ENABLED="true" # 电池电压过低时是否自动关机。
+BATTERY_LOW_SHUTDOWN_THRESHOLD_MV="3200" # 低于该毫伏值时触发自动关机，3.2V 对应 3200mV。
+BATTERY_LOW_SHUTDOWN_DELAY_SEC="2" # 触发低压关机后延迟执行的秒数，留出日志和心跳上报时间。
+BATTERY_LOW_SHUTDOWN_COMMAND="poweroff" # 低压保护最终执行的关机命令。
 
 # LED controller on the I2C GPIO expander. Only bits 3, 4, and 5 are modified.
 LED_ENABLED="true" # 是否启用状态灯控制。
@@ -139,6 +156,24 @@ STREAM_SERVICE_START_CMD="/etc/init.d/S95majestic start" # Majestic 异常退出
 STREAM_RELOAD_CMD="killall -HUP majestic" # 修改 Majestic 配置后的重载命令。
 STREAM_RELOAD_WAIT_SEC="2" # 重载后等待进程稳定的时间。
 STREAM_START_WAIT_SEC="2" # 异常恢复启动后等待进程就绪的时间。
+MAJESTIC_STARTUP_RESET_ENABLED="true" # main 每次启动时是否恢复 Majestic 到脚本默认空闲配置。
+MAJESTIC_STARTUP_VIDEO0_ENABLED="true" # firmware 自启动默认：主码流启用。
+MAJESTIC_STARTUP_VIDEO0_CODEC="h264" # firmware 自启动默认：主码流编码。
+MAJESTIC_STARTUP_VIDEO0_SIZE="1920x1080" # firmware 自启动默认：主码流分辨率。
+MAJESTIC_STARTUP_VIDEO0_FPS="5" # firmware 自启动默认：主码流帧率。
+MAJESTIC_STARTUP_VIDEO0_BITRATE="1280" # firmware 自启动默认：主码流码率。
+MAJESTIC_STARTUP_VIDEO1_ENABLED="true" # firmware 自启动默认：子码流启用。
+MAJESTIC_STARTUP_VIDEO1_CODEC="h264" # firmware 自启动默认：子码流编码。
+MAJESTIC_STARTUP_VIDEO1_SIZE="960x576" # firmware 自启动默认：子码流分辨率。
+MAJESTIC_STARTUP_VIDEO1_FPS="15" # firmware 自启动默认：子码流帧率。
+MAJESTIC_STARTUP_VIDEO1_BITRATE="384" # firmware 自启动默认：子码流码率。
+MAJESTIC_STARTUP_RECORDS_ENABLED="false" # firmware 自启动默认：录像关闭。
+MAJESTIC_STARTUP_RECORDS_PATH="/mnt/mmcblk0p1/%F" # firmware 自启动默认：录像目录模板。
+MAJESTIC_STARTUP_RECORDS_SPLIT="20" # firmware 自启动默认：录像切片分钟数。
+MAJESTIC_STARTUP_RECORDS_MAX_USAGE="95" # firmware 自启动默认：录像最大空间占用。
+MAJESTIC_STARTUP_OUTGOING_ENABLED="true" # firmware 自启动默认：outgoing 启用但 server 为空。
+MAJESTIC_STARTUP_OUTGOING_SUBSTREAM="true" # firmware 自启动默认：outgoing 使用子码流。
+MAJESTIC_STARTUP_OUTGOING_SERVER="" # firmware 自启动默认：不保留旧推流地址。
 
 # 日志开关。默认减少现场输出；排查问题时可以通过 config_page.sh set 打开。
 LOG_VERBOSE="false" # 是否输出详细调试日志。
@@ -181,6 +216,7 @@ STATE_RECORDING_FILE="${STATE_DIR}/is_recording" # 是否录像状态文件。
 STATE_PUBLISHING_FILE="${STATE_DIR}/is_publishing" # 是否推流状态文件。
 STATE_CHARGING_FILE="${STATE_DIR}/is_charging" # 是否充电状态文件。
 STATE_BATTERY_FILE="${STATE_DIR}/battery" # 电量百分比状态文件。
+STATE_BATTERY_VOLTAGE_MV_FILE="${STATE_DIR}/battery_voltage_mv" # 电池电压毫伏状态文件。
 STATE_SIGNAL_FILE="${STATE_DIR}/signal" # 信号强度状态文件。
 STATE_CURRENT_TASK_ID_FILE="${STATE_DIR}/current_task_id" # 当前任务 ID 文件。
 STATE_CURRENT_RECORD_ID_FILE="${STATE_DIR}/current_record_id" # 当前录像 ID 文件。
@@ -243,6 +279,24 @@ STREAM_SERVICE_START_CMD
 STREAM_RELOAD_CMD
 STREAM_RELOAD_WAIT_SEC
 STREAM_START_WAIT_SEC
+MAJESTIC_STARTUP_RESET_ENABLED
+MAJESTIC_STARTUP_VIDEO0_ENABLED
+MAJESTIC_STARTUP_VIDEO0_CODEC
+MAJESTIC_STARTUP_VIDEO0_SIZE
+MAJESTIC_STARTUP_VIDEO0_FPS
+MAJESTIC_STARTUP_VIDEO0_BITRATE
+MAJESTIC_STARTUP_VIDEO1_ENABLED
+MAJESTIC_STARTUP_VIDEO1_CODEC
+MAJESTIC_STARTUP_VIDEO1_SIZE
+MAJESTIC_STARTUP_VIDEO1_FPS
+MAJESTIC_STARTUP_VIDEO1_BITRATE
+MAJESTIC_STARTUP_RECORDS_ENABLED
+MAJESTIC_STARTUP_RECORDS_PATH
+MAJESTIC_STARTUP_RECORDS_SPLIT
+MAJESTIC_STARTUP_RECORDS_MAX_USAGE
+MAJESTIC_STARTUP_OUTGOING_ENABLED
+MAJESTIC_STARTUP_OUTGOING_SUBSTREAM
+MAJESTIC_STARTUP_OUTGOING_SERVER
 LOG_VERBOSE
 CONFIG_COMMAND_VERBOSE
 MQTT_PAYLOAD_VERBOSE
@@ -251,4 +305,8 @@ LED_STATUS_DELAY_SEC
 LED_UPLOAD_ON_SEC
 LED_UPLOAD_OFF_SEC
 LED_UPLOAD_MIN_BLINK_SEC
+BATTERY_LOW_SHUTDOWN_ENABLED
+BATTERY_LOW_SHUTDOWN_THRESHOLD_MV
+BATTERY_LOW_SHUTDOWN_DELAY_SEC
+BATTERY_LOW_SHUTDOWN_COMMAND
 "

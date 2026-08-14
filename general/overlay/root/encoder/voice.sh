@@ -4,28 +4,70 @@ SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$SCRIPT_DIR/common.sh"
 
 # 桌牌识别语音配置。后续调整播放次数或播报间隔时，只需要修改这里。
-# desk_8k.pcm 是 8kHz 的原始 PCM 文件，当前语音长度约 5.6 秒。
+# desk_8k.pcm 是 8kHz、16-bit、单声道原始 PCM，当前语音长度约 2.8 秒。
 RESOURCE_DIR="${RESOURCE_DIR:-/root/resources}" # 固件内置资源目录。
 VOICE_DESK_PCM_FILE="${VOICE_DESK_PCM_FILE:-${RESOURCE_DIR}/desk_8k.pcm}" # 桌牌识别语音 PCM 文件。
 VOICE_PLAY_URL="${VOICE_PLAY_URL:-http://127.0.0.1/play_audio}" # Majestic 本地语音播放接口。
+VOICE_SAMPLE_RATE="${VOICE_SAMPLE_RATE:-8000}" # 原始 PCM 采样率，必须与播报文件一致。
+VOICE_CODEC="${VOICE_CODEC:-opus}" # Majestic 主音频编码器；启用 audio 后才能创建 ADEC/AO 播放通道。
+VOICE_INPUT_VOLUME="${VOICE_INPUT_VOLUME:-30}" # Majestic 音频输入音量，使用固件安全默认值。
+VOICE_OUTPUT_VOLUME="${VOICE_OUTPUT_VOLUME:-80}" # 扬声器输出音量。
 VOICE_REPEAT_COUNT="${VOICE_REPEAT_COUNT:-3}" # 一次指令重复播报次数。
-VOICE_AUDIO_DURATION_SEC="${VOICE_AUDIO_DURATION_SEC:-6}" # 单次语音播放预留时长，应覆盖完整 PCM 时长。
+VOICE_AUDIO_DURATION_SEC="${VOICE_AUDIO_DURATION_SEC:-4}" # 单次语音播放预留时长，应覆盖约 2.8 秒的完整 PCM。
 VOICE_GAP_SEC="${VOICE_GAP_SEC:-2}" # 两次语音之间的额外空白间隔。
 VOICE_CONNECT_TIMEOUT_SEC="${VOICE_CONNECT_TIMEOUT_SEC:-3}" # 连接播放接口的超时时间。
 VOICE_REQUEST_TIMEOUT_SEC="${VOICE_REQUEST_TIMEOUT_SEC:-10}" # 提交一次 PCM 的最长等待时间。
-VOICE_RELOAD_WAIT_SEC="${VOICE_RELOAD_WAIT_SEC:-1}" # 修改音频输出开关后等待 Majestic 重载的时间。
+VOICE_RELOAD_WAIT_SEC="${VOICE_RELOAD_WAIT_SEC:-2}" # 每次通知 Majestic 重载后等待服务恢复的时间。
+VOICE_RELOAD_RETRY_SEC="${VOICE_RELOAD_RETRY_SEC:-3}" # HUP 被 Majestic 防抖忽略时，重试前额外等待时间。
+VOICE_RELOAD_RETRY_COUNT="${VOICE_RELOAD_RETRY_COUNT:-3}" # 等待音频输出接口就绪的最大重载次数。
 VOICE_PREEMPT_WAIT_SEC="${VOICE_PREEMPT_WAIT_SEC:-1}" # 抢占旧播报时等待其响应 TERM 的时间。
 VOICE_LOCK_RETRY_COUNT="${VOICE_LOCK_RETRY_COUNT:-5}" # 并发抢占语音锁的最大重试次数。
 VOICE_PLAYER_LOCK_DIR="${VOICE_PLAYER_PID_FILE}.lock"
 VOICE_CHILD_PID=""
 
 voice_set_output_enabled() {
-    # 播放前临时打开 Majestic 音频输出；修改 YAML 后必须通知 Majestic 重载。
+    # outputEnabled 只开放 HTTP 播放接口；audio.enabled 负责创建底层 ADEC/AO 通道。
+    # 两者必须同时开启，否则 /play_audio 可能返回 200，但日志会报 ERR_ADEC_UNEXIST 且扬声器无声。
     enabled="$1"
     quoted_config_file=$(shell_quote "$STREAM_CONFIG_FILE")
+
+    if [ "$enabled" = "true" ]; then
+        quoted_codec=$(shell_quote "$VOICE_CODEC")
+        run_config_command "voice_audio_enabled" "yaml-cli -i $quoted_config_file -s .audio.enabled true" || return 1
+        run_config_command "voice_audio_volume" "yaml-cli -i $quoted_config_file -s .audio.volume $VOICE_INPUT_VOLUME" || return 1
+        run_config_command "voice_audio_srate" "yaml-cli -i $quoted_config_file -s .audio.srate $VOICE_SAMPLE_RATE" || return 1
+        run_config_command "voice_audio_codec" "yaml-cli -i $quoted_config_file -s .audio.codec $quoted_codec" || return 1
+        run_config_command "voice_output_volume" "yaml-cli -i $quoted_config_file -s .audio.outputVolume $VOICE_OUTPUT_VOLUME" || return 1
+    fi
+
     run_config_command "voice_output_$enabled" "yaml-cli -i $quoted_config_file -s .audio.outputEnabled $enabled" || return 1
-    stream_service_reload_or_recover "voice_output_reload_$enabled" || return 1
-    sleep "$VOICE_RELOAD_WAIT_SEC"
+
+    reload_attempt=1
+    while [ "$reload_attempt" -le "$VOICE_RELOAD_RETRY_COUNT" ]; do
+        stream_service_reload_or_recover "voice_output_reload_${enabled}_$reload_attempt" || return 1
+        sleep "$VOICE_RELOAD_WAIT_SEC"
+
+        if [ "$enabled" != "true" ] || voice_output_is_ready; then
+            return 0
+        fi
+
+        log_warn_tag "VOICE" "audio output not ready after reload attempt=$reload_attempt"
+        reload_attempt=$((reload_attempt + 1))
+        [ "$reload_attempt" -le "$VOICE_RELOAD_RETRY_COUNT" ] && sleep "$VOICE_RELOAD_RETRY_SEC"
+    done
+
+    log_error_tag "VOICE" "audio output did not become ready retries=$VOICE_RELOAD_RETRY_COUNT url=$VOICE_PLAY_URL"
+    return 1
+}
+
+voice_output_is_ready() {
+    ready_http_code=$(curl -sS \
+        --connect-timeout "$VOICE_CONNECT_TIMEOUT_SEC" \
+        --max-time "$VOICE_REQUEST_TIMEOUT_SEC" \
+        -o /dev/null \
+        -w '%{http_code}' \
+        "$VOICE_PLAY_URL" 2>/dev/null) || return 1
+    [ "$ready_http_code" = "200" ]
 }
 
 voice_pid_is_running() {

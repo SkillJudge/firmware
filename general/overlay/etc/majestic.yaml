@@ -51,7 +51,12 @@ osd:
   posY: 16
 
 audio:
-  enabled: false
+  enabled: true
+  volume: 30
+  srate: 8000
+  codec: opus
+  outputEnabled: true
+  outputVolume: 100
 
 rtsp:
   enabled: true

@@ -13,6 +13,7 @@ ENCODER_MAIN_SCRIPT="${ENCODER_MAIN_SCRIPT:-${ENCODER_HOME}/encoder_main.sh}"
 # 固件内置资源目录。jq 放在这里，启动时把该目录放到 PATH 前面供协议脚本调用。
 RESOURCE_DIR="${RESOURCE_DIR:-/root/resources}"
 JQ_BINARY_FILE="${JQ_BINARY_FILE:-${RESOURCE_DIR}/jq}"
+START_ENCODER_SCRIPT="${START_ENCODER_SCRIPT:-${ENCODER_HOME}/start_encoder.sh}"
 
 # 启动锁用于避免重复创建等待任务。
 START_STATE_DIR="${START_STATE_DIR:-${ENCODER_HOME}/runtime/state}"

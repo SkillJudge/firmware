@@ -3,8 +3,8 @@
 SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$SCRIPT_DIR/state.sh"
 
-# Battery state saved for heartbeat/reporting stays as SOC percent only.
-# Manual status output also reads VCELL so field debugging can see voltage.
+# Heartbeat/reporting keeps SOC percent and the latest valid VCELL voltage in mV.
+# Manual status output also prints both values for field debugging.
 : "${BATTERY_REFRESH_ENABLED:=true}"
 : "${BATTERY_I2C_BUS:=1}"
 : "${BATTERY_I2C_ADDR:=0x36}"
@@ -18,6 +18,10 @@ SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 : "${BATTERY_PROTECT_GPIO_MASK:=0x07}"
 : "${BATTERY_CHARGING_THRESHOLD_RAW:=5}"
 : "${BATTERY_DISCHARGING_THRESHOLD_RAW:=-5}"
+: "${BATTERY_LOW_SHUTDOWN_ENABLED:=true}"
+: "${BATTERY_LOW_SHUTDOWN_THRESHOLD_MV:=3200}"
+: "${BATTERY_LOW_SHUTDOWN_DELAY_SEC:=2}"
+: "${BATTERY_LOW_SHUTDOWN_COMMAND:=poweroff}"
 
 battery_swap_word() {
     raw="$1"
@@ -191,8 +195,12 @@ battery_read_charging_from_gpio() {
 }
 
 battery_refresh_charging_state() {
-    gpio_charging=$(battery_read_charging_from_gpio)
-    gpio_rc=$?
+    gpio_charging=""
+    if gpio_charging=$(battery_read_charging_from_gpio); then
+        gpio_rc=0
+    else
+        gpio_rc=$?
+    fi
 
     if [ "$gpio_rc" = "0" ] && [ -n "$gpio_charging" ]; then
         state_set_charging "$gpio_charging"
@@ -228,6 +236,51 @@ battery_refresh_charging_state() {
     return 0
 }
 
+battery_is_uint() {
+    case "$1" in
+        ''|*[!0-9]*)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+battery_schedule_low_voltage_shutdown() {
+    voltage_mv="$1"
+    threshold_mv="$2"
+    delay_sec="$3"
+
+    battery_is_uint "$delay_sec" || delay_sec=0
+    [ -n "$BATTERY_LOW_SHUTDOWN_COMMAND" ] || {
+        log_error_tag "BATTERY" "low voltage shutdown command empty voltage_mv=$voltage_mv threshold_mv=$threshold_mv"
+        return 1
+    }
+
+    log_error_tag "BATTERY" "low voltage shutdown scheduled voltage_mv=$voltage_mv threshold_mv=$threshold_mv delay=${delay_sec}s command=$BATTERY_LOW_SHUTDOWN_COMMAND"
+    (
+        sync 2>/dev/null || true
+        sleep "$delay_sec"
+        sh -c "$BATTERY_LOW_SHUTDOWN_COMMAND"
+    ) &
+}
+
+battery_check_low_voltage_shutdown() {
+    [ "$BATTERY_LOW_SHUTDOWN_ENABLED" = "true" ] || return 0
+
+    voltage_mv="$1"
+    threshold_mv="$BATTERY_LOW_SHUTDOWN_THRESHOLD_MV"
+
+    battery_is_uint "$voltage_mv" || return 0
+    if ! battery_is_uint "$threshold_mv"; then
+        log_warn_tag "BATTERY" "invalid low shutdown threshold: $threshold_mv"
+        return 0
+    fi
+
+    if [ "$voltage_mv" -lt "$threshold_mv" ]; then
+        battery_schedule_low_voltage_shutdown "$voltage_mv" "$threshold_mv" "$BATTERY_LOW_SHUTDOWN_DELAY_SEC"
+    fi
+}
+
 battery_refresh_state() {
     [ "$BATTERY_REFRESH_ENABLED" = "true" ] || return 0
 
@@ -241,6 +294,17 @@ battery_refresh_state() {
         log_debug_tag "BATTERY" "battery=$percent"
     fi
 
+    voltage_mv=$(battery_read_voltage_mv) || {
+        log_debug_tag "BATTERY" "voltage read failed, keep voltage_mv=$(state_get_battery_voltage_mv)"
+        voltage_mv=""
+    }
+
+    if [ -n "$voltage_mv" ]; then
+        state_set_battery_voltage_mv "$voltage_mv"
+        log_debug_tag "BATTERY" "voltage_mv=$voltage_mv"
+        battery_check_low_voltage_shutdown "$voltage_mv"
+    fi
+
     battery_refresh_charging_state
     return 0
 }
@@ -248,18 +312,24 @@ battery_refresh_state() {
 battery_print_status() {
     percent=$(battery_read_percent) || return 1
     voltage_mv=$(battery_read_voltage_mv) || return 1
-    gpio=$(battery_read_charge_gpio_raw 2>/dev/null)
 
     printf 'percent=%s%%\n' "$percent"
     printf 'voltage=%smV\n' "$voltage_mv"
-    if [ -n "$gpio" ]; then
+    if gpio=$(battery_read_charge_gpio_raw 2>/dev/null); then
         chrg_level=$(battery_gpio_level "$gpio" "$BATTERY_CHRG_GPIO_MASK")
         stdby_level=$(battery_gpio_level "$gpio" "$BATTERY_STDBY_GPIO_MASK")
-        is_charging=$(battery_interpret_charging_levels "$chrg_level" "$stdby_level" 2>/dev/null) || is_charging=unknown
+        if is_charging=$(battery_interpret_charging_levels "$chrg_level" "$stdby_level" 2>/dev/null); then
+            :
+        else
+            is_charging=unknown
+        fi
         printf 'gpio=0x%02x\n' "$gpio"
         printf 'gpio0_chrg=%s\n' "$chrg_level"
         printf 'gpio1_stdby=%s\n' "$stdby_level"
         printf 'is_charging=%s\n' "$is_charging"
+    else
+        printf 'gpio=unknown\n'
+        printf 'is_charging=unknown\n'
     fi
 }
 

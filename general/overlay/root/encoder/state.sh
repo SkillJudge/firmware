@@ -36,6 +36,7 @@ state_init() {
     [ -f "$STATE_PUBLISHING_FILE" ] || echo false > "$STATE_PUBLISHING_FILE"
     [ -f "$STATE_CHARGING_FILE" ] || echo false > "$STATE_CHARGING_FILE"
     [ -f "$STATE_BATTERY_FILE" ] || echo 100 > "$STATE_BATTERY_FILE"
+    [ -f "$STATE_BATTERY_VOLTAGE_MV_FILE" ] || echo 0 > "$STATE_BATTERY_VOLTAGE_MV_FILE"
     [ -f "$STATE_SIGNAL_FILE" ] || echo 0 > "$STATE_SIGNAL_FILE"
     [ -f "$STATE_CURRENT_TASK_ID_FILE" ] || : > "$STATE_CURRENT_TASK_ID_FILE"
     [ -f "$STATE_CURRENT_RECORD_ID_FILE" ] || : > "$STATE_CURRENT_RECORD_ID_FILE"
@@ -58,6 +59,8 @@ state_get_charging() { state_read "$STATE_CHARGING_FILE" false; }
 state_set_charging() { state_write "$STATE_CHARGING_FILE" "$1"; }
 state_get_battery() { state_read "$STATE_BATTERY_FILE" 100; }
 state_set_battery() { state_write "$STATE_BATTERY_FILE" "$1"; }
+state_get_battery_voltage_mv() { state_read "$STATE_BATTERY_VOLTAGE_MV_FILE" 0; }
+state_set_battery_voltage_mv() { state_write "$STATE_BATTERY_VOLTAGE_MV_FILE" "$1"; }
 state_get_signal() { state_read "$STATE_SIGNAL_FILE" 0; }
 state_set_signal() { state_write "$STATE_SIGNAL_FILE" "$1"; }
 state_get_current_task_id() { state_read "$STATE_CURRENT_TASK_ID_FILE" ""; }
@@ -113,6 +116,7 @@ state_dump() {
     printf 'is_publishing=%s\n' "$(state_get_publishing)"
     printf 'is_charging=%s\n' "$(state_get_charging)"
     printf 'battery=%s\n' "$(state_get_battery)"
+    printf 'battery_voltage_mv=%s\n' "$(state_get_battery_voltage_mv)"
     printf 'signal=%s\n' "$(state_get_signal)"
     printf 'task_id=%s\n' "$(state_get_current_task_id)"
     printf 'record_id=%s\n' "$(state_get_current_record_id)"
