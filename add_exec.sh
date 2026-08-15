@@ -23,6 +23,7 @@ general/overlay/root/encoder/protocol.sh
 general/overlay/root/encoder/runtime.sh
 general/overlay/root/encoder/state.sh
 general/overlay/root/encoder/voice.sh
+general/overlay/root/encoder/check_sd_space.sh
 general/overlay/etc/init.d/S40network
 general/overlay/etc/init.d/S99zzencoder
 general/overlay/root/encoder/start_encoder.sh
