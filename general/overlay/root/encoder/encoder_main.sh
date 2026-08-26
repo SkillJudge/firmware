@@ -50,6 +50,7 @@ cleanup_main() {
 
     export ENCODER_STDOUT_LOG=1
     log_info_tag "LIFECYCLE" "encoder main cleanup start"
+    feature_restore_startup_media "main_cleanup" || log_warn_tag "LIFECYCLE" "cleanup Majestic restore failed, continue child cleanup"
     stop_pidfile_process "$LISTENER_PID_FILE"
     stop_pidfile_process "$HEARTBEAT_PID_FILE"
     stop_pidfile_process "$SEGMENT_WORKER_PID_FILE"
@@ -72,7 +73,7 @@ print_title "$PROJECT_TITLE Main"
 
 ensure_device_id_configured || exit 1
 
-if ! claim_pidfile "$MAIN_PID_FILE" "$0"; then
+if ! claim_pidfile "$MAIN_PID_FILE" "encoder_main.sh"; then
     log_error "encoder main already running"
     exit 1
 fi
@@ -108,13 +109,13 @@ while true; do
         stream_service_start_if_missing || log_error_tag "LIFECYCLE" "Majestic service restart failed"
     fi
 
-    if ! is_pid_running_file "$HEARTBEAT_PID_FILE"; then
+    if ! is_pid_running_file "$HEARTBEAT_PID_FILE" "app_service.sh heartbeat"; then
         log_warn_tag "LIFECYCLE" "heartbeat service lost, restarting"
         sh "$APP_HOME/app_service.sh" heartbeat &
         sleep 1
     fi
 
-    if ! is_pid_running_file "$LISTENER_PID_FILE"; then
+    if ! is_pid_running_file "$LISTENER_PID_FILE" "app_service.sh listener"; then
         log_warn_tag "LIFECYCLE" "listener service lost, restarting"
         sh "$APP_HOME/app_service.sh" listener &
         sleep 1

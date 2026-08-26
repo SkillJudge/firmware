@@ -139,13 +139,37 @@ service_heartbeat_once() {
     mqtt_pub_json "$MQTT_HEARTBEAT_TOPIC" "$payload"
 }
 
+service_sleep_with_main_guard() {
+    role="$1"
+    total_sec="$2"
+    check_sec="${CHILD_EXIT_CHECK_SEC:-1}"
+
+    case "$check_sec" in
+        ''|*[!0-9]*|0)
+            check_sec=1
+            ;;
+    esac
+
+    waited_sec=0
+    while [ "$waited_sec" -lt "$total_sec" ]; do
+        encoder_exit_if_main_stopped "$role"
+        remaining_sec=$((total_sec - waited_sec))
+        sleep_sec="$check_sec"
+        [ "$sleep_sec" -le "$remaining_sec" ] || sleep_sec="$remaining_sec"
+        [ "$sleep_sec" -gt 0 ] || break
+        sleep "$sleep_sec"
+        waited_sec=$((waited_sec + sleep_sec))
+    done
+}
+
 service_heartbeat_forever() {
     # 常驻心跳服务。通过 pidfile 保证同一设备目录下只跑一个心跳进程。
     ensure_layout
     state_init
     ensure_runtime_files
+    encoder_exit_if_main_stopped "heartbeat"
 
-    if ! claim_pidfile "$HEARTBEAT_PID_FILE"; then
+    if ! claim_pidfile "$HEARTBEAT_PID_FILE" "app_service.sh heartbeat"; then
         log_warn "heartbeat service already running"
         exit 0
     fi
@@ -154,8 +178,9 @@ service_heartbeat_forever() {
     log_info_tag "LIFECYCLE" "heartbeat service start interval=${HEARTBEAT_INTERVAL_SEC}s"
 
     while true; do
+        encoder_exit_if_main_stopped "heartbeat"
         service_heartbeat_once
-        sleep "$HEARTBEAT_INTERVAL_SEC"
+        service_sleep_with_main_guard "heartbeat" "$HEARTBEAT_INTERVAL_SEC"
     done
 }
 
@@ -168,6 +193,7 @@ service_dispatch() {
     state_init
     ensure_runtime_files
     ensure_mqtt_tools || return 1
+    encoder_exit_if_main_stopped "dispatch"
     feature_result_reset
 
     if ! protocol_parse_command "$topic" "$payload"; then
@@ -261,6 +287,7 @@ service_listener_forever() {
     ensure_runtime_files
     ensure_mqtt_tools || exit 1
     require_command mkfifo || exit 1
+    encoder_exit_if_main_stopped "listener"
 
     if ! claim_pidfile "$LISTENER_PID_FILE" "$APP_HOME/app_service.sh listener"; then
         log_warn "listener service already running"
@@ -269,11 +296,16 @@ service_listener_forever() {
 
     listener_fifo="${TMP_DIR}/listener_$$.fifo"
     listener_sub_pid=""
+    listener_guard_pid=""
 
     service_listener_cleanup() {
         if [ -n "$listener_sub_pid" ] && kill -0 "$listener_sub_pid" 2>/dev/null; then
             kill "$listener_sub_pid" 2>/dev/null
             wait "$listener_sub_pid" 2>/dev/null
+        fi
+        if [ -n "$listener_guard_pid" ] && kill -0 "$listener_guard_pid" 2>/dev/null; then
+            kill "$listener_guard_pid" 2>/dev/null
+            wait "$listener_guard_pid" 2>/dev/null
         fi
         rm -f "$listener_fifo"
         release_pidfile_if_owner "$LISTENER_PID_FILE"
@@ -291,7 +323,21 @@ service_listener_forever() {
     mqtt_sub_forever_with_topic "$MQTT_SUBSCRIBE_TOPIC" > "$listener_fifo" &
     listener_sub_pid=$!
 
+    (
+        while true; do
+            sleep "$CHILD_EXIT_CHECK_SEC"
+            encoder_main_is_running && continue
+            encoder_restore_after_main_stopped "listener"
+            if [ -n "$listener_sub_pid" ] && kill -0 "$listener_sub_pid" 2>/dev/null; then
+                kill "$listener_sub_pid" 2>/dev/null
+            fi
+            exit 0
+        done
+    ) &
+    listener_guard_pid=$!
+
     while IFS= read -r line; do
+        encoder_exit_if_main_stopped "listener"
         [ -n "$line" ] || continue
         topic=${line%% *}
         payload=${line#* }

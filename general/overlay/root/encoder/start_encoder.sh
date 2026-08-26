@@ -23,6 +23,23 @@ START_LOG_FILE="${START_LOG_FILE:-${START_LOG_DIR}/encoder_autostart.log}"
 MAIN_PID_FILE="${MAIN_PID_FILE:-${START_STATE_DIR}/encoder_main.pid}"
 FW_PRINTENV_CMD="${FW_PRINTENV_CMD:-fw_printenv}"
 
+ENCODER_CONFIG_FILE="${ENCODER_CONFIG_FILE:-${ENCODER_HOME}/config.sh}"
+[ -f "$ENCODER_CONFIG_FILE" ] && . "$ENCODER_CONFIG_FILE"
+
+LOCAL_TIMEZONE="${LOCAL_TIMEZONE:-CST-8}"
+TZ="$LOCAL_TIMEZONE"
+export TZ
+
+LISTENER_PID_FILE="${LISTENER_PID_FILE:-${START_STATE_DIR}/listener.pid}"
+HEARTBEAT_PID_FILE="${HEARTBEAT_PID_FILE:-${START_STATE_DIR}/heartbeat.pid}"
+SEGMENT_WORKER_PID_FILE="${SEGMENT_WORKER_PID_FILE:-${START_STATE_DIR}/segment_worker.pid}"
+VOICE_PLAYER_PID_FILE="${VOICE_PLAYER_PID_FILE:-${START_STATE_DIR}/voice_player.pid}"
+LED_UPLOAD_BLINK_PID_FILE="${LED_UPLOAD_BLINK_PID_FILE:-${START_STATE_DIR}/led_upload_blink.pid}"
+MAIN_STOPPED_RESTORE_LOCK_DIR="${MAIN_STOPPED_RESTORE_LOCK_DIR:-${START_STATE_DIR}/main_stopped_restore.lock}"
+VOICE_PLAYER_LOCK_DIR="${VOICE_PLAYER_LOCK_DIR:-${VOICE_PLAYER_PID_FILE}.lock}"
+CHILD_EXIT_CHECK_SEC="${CHILD_EXIT_CHECK_SEC:-1}"
+CHILD_EXIT_WAIT_SEC="${CHILD_EXIT_WAIT_SEC:-15}"
+
 log_info() {
     printf '%s [start_encoder.sh] [INFO] %s\n' "$(date '+%F %T')" "$*"
 }
@@ -88,6 +105,112 @@ is_pid_running_file() {
     pid_matches_command "$pid" "$expected_command"
 }
 
+encoder_main_process_is_running() {
+    ps w 2>/dev/null | awk -v self="$$" '
+        NR > 1 && $1 != self && $0 ~ /encoder_main\.sh/ {
+            found = 1
+        }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+encoder_main_is_running() {
+    is_pid_running_file "$MAIN_PID_FILE" "encoder_main.sh" && return 0
+    encoder_main_process_is_running
+}
+
+append_active_service() {
+    item="$1"
+    if [ -n "$active_services" ]; then
+        active_services="${active_services},${item}"
+    else
+        active_services="$item"
+    fi
+}
+
+check_child_pidfile() {
+    pid_file="$1"
+    expected_command="$2"
+    label="$3"
+    pid=$(cat "$pid_file" 2>/dev/null)
+
+    if pid_matches_command "$pid" "$expected_command"; then
+        append_active_service "${label}:${pid}"
+        return 0
+    fi
+
+    if [ -f "$pid_file" ]; then
+        log_warn "remove stale child pidfile label=$label pid=${pid:-empty} file=$pid_file"
+        rm -f "$pid_file"
+    fi
+
+    return 1
+}
+
+check_child_lock_dir() {
+    lock_dir="$1"
+    label="$2"
+
+    [ -d "$lock_dir" ] || return 1
+    lock_owner=$(cat "$lock_dir/pid" 2>/dev/null)
+    if [ -n "$lock_owner" ] && kill -0 "$lock_owner" 2>/dev/null; then
+        append_active_service "${label}:${lock_owner}"
+        return 0
+    fi
+
+    log_warn "remove stale child lock label=$label owner=${lock_owner:-empty} dir=$lock_dir"
+    rm -rf "$lock_dir"
+    return 1
+}
+
+scan_encoder_child_processes() {
+    self_pid="$$"
+    ps w 2>/dev/null |
+        grep "$ENCODER_HOME" |
+        grep -E 'app_service\.sh|voice\.sh|led\.sh' |
+        grep -v grep |
+        while read -r pid rest; do
+            [ -n "$pid" ] || continue
+            [ "$pid" = "$self_pid" ] && continue
+            printf '%s:%s ' "$pid" "$rest"
+        done
+}
+
+collect_active_child_services() {
+    active_services=""
+
+    check_child_pidfile "$HEARTBEAT_PID_FILE" "app_service.sh heartbeat" "heartbeat" || true
+    check_child_pidfile "$LISTENER_PID_FILE" "app_service.sh listener" "listener" || true
+    check_child_pidfile "$SEGMENT_WORKER_PID_FILE" "app_service.sh segment_worker" "segment_worker" || true
+    check_child_pidfile "$VOICE_PLAYER_PID_FILE" "voice.sh" "voice" || true
+    check_child_pidfile "$LED_UPLOAD_BLINK_PID_FILE" "led.sh upload_blink_worker" "led_upload_blink" || true
+    check_child_lock_dir "$MAIN_STOPPED_RESTORE_LOCK_DIR" "majestic_restore" || true
+    check_child_lock_dir "$VOICE_PLAYER_LOCK_DIR" "voice_lock" || true
+
+    scanned_children=$(scan_encoder_child_processes)
+    [ -n "$scanned_children" ] && append_active_service "process:${scanned_children}"
+}
+
+wait_for_previous_child_services_to_exit() {
+    waited_sec=0
+
+    while true; do
+        collect_active_child_services
+        if [ -z "$active_services" ]; then
+            log_info "old child services are fully stopped"
+            return 0
+        fi
+
+        if [ "$waited_sec" -ge "$CHILD_EXIT_WAIT_SEC" ]; then
+            fail "old child services still active after ${CHILD_EXIT_WAIT_SEC}s: $active_services"
+        fi
+
+        log_warn "wait old child services to exit before restart: $active_services"
+        sleep "$CHILD_EXIT_CHECK_SEC"
+        waited_sec=$((waited_sec + CHILD_EXIT_CHECK_SEC))
+    done
+}
+
 release_start_lock() {
     lock_owner=$(cat "$START_LOCK_DIR/pid" 2>/dev/null)
     [ "$lock_owner" = "$$" ] || return 0
@@ -103,7 +226,7 @@ claim_start_lock() {
     fi
 
     lock_owner=$(cat "$START_LOCK_DIR/pid" 2>/dev/null)
-    if pid_matches_command "$lock_owner" "$START_ENCODER_SCRIPT"; then
+    if pid_matches_command "$lock_owner" "start_encoder.sh"; then
         log_info "startup task already waiting pid=$lock_owner"
         return 2
     fi
@@ -147,11 +270,24 @@ case "$START_DELAY_SEC" in
         ;;
 esac
 
+case "$CHILD_EXIT_CHECK_SEC" in
+    ''|*[!0-9]*|0)
+        fail "CHILD_EXIT_CHECK_SEC must be a positive integer: $CHILD_EXIT_CHECK_SEC"
+        ;;
+esac
+
+case "$CHILD_EXIT_WAIT_SEC" in
+    ''|*[!0-9]*)
+        fail "CHILD_EXIT_WAIT_SEC must be a non-negative integer: $CHILD_EXIT_WAIT_SEC"
+        ;;
+esac
+
 # 自动启动统一从 U-Boot 环境读取设备 ID，再导出给 encoder_main.sh。
 load_device_id_from_uboot
 
-if is_pid_running_file "$MAIN_PID_FILE" "$ENCODER_MAIN_SCRIPT"; then
-    log_info "encoder main already running pid=$(cat "$MAIN_PID_FILE")"
+if encoder_main_is_running; then
+    main_pid=$(cat "$MAIN_PID_FILE" 2>/dev/null)
+    log_info "encoder main already running pid=${main_pid:-unknown}"
     exit 0
 fi
 
@@ -175,11 +311,13 @@ log_info "wait ${START_DELAY_SEC}s for board services to become stable"
 sleep "$START_DELAY_SEC"
 
 # 等待期间可能由其它流程启动成功，因此启动前再次检查。
-if is_pid_running_file "$MAIN_PID_FILE" "$ENCODER_MAIN_SCRIPT"; then
-    log_info "encoder main already running pid=$(cat "$MAIN_PID_FILE")"
+if encoder_main_is_running; then
+    main_pid=$(cat "$MAIN_PID_FILE" 2>/dev/null)
+    log_info "encoder main already running pid=${main_pid:-unknown}"
     exit 0
 fi
 
+wait_for_previous_child_services_to_exit
 prepare_jq
 
 [ -f "$ENCODER_MAIN_SCRIPT" ] || fail "encoder main script not found: $ENCODER_MAIN_SCRIPT"

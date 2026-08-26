@@ -354,37 +354,16 @@ feature_record_disable() {
 
 feature_startup_apply_video_profile() {
     # main 重启恢复时使用 firmware 自启动默认值，不影响推流/录像运行时 profile。
-    log_debug "restore startup video profile video0=${MAJESTIC_STARTUP_VIDEO0_ENABLED}/${MAJESTIC_STARTUP_VIDEO0_SIZE}/${MAJESTIC_STARTUP_VIDEO0_FPS} video1=${MAJESTIC_STARTUP_VIDEO1_ENABLED}/${MAJESTIC_STARTUP_VIDEO1_SIZE}/${MAJESTIC_STARTUP_VIDEO1_FPS}"
-
-    feature_cli_set_bool "startup_video0_enabled" ".video0.enabled" "$MAJESTIC_STARTUP_VIDEO0_ENABLED" || return 1
-    feature_cli_set_string "startup_video0_codec" ".video0.codec" "$MAJESTIC_STARTUP_VIDEO0_CODEC" || return 1
-    feature_cli_set_string "startup_video0_size" ".video0.size" "$MAJESTIC_STARTUP_VIDEO0_SIZE" || return 1
-    feature_cli_set_number "startup_video0_fps" ".video0.fps" "$MAJESTIC_STARTUP_VIDEO0_FPS" || return 1
-    feature_cli_set_number "startup_video0_bitrate" ".video0.bitrate" "$MAJESTIC_STARTUP_VIDEO0_BITRATE" || return 1
-
-    feature_cli_set_bool "startup_video1_enabled" ".video1.enabled" "$MAJESTIC_STARTUP_VIDEO1_ENABLED" || return 1
-    feature_cli_set_string "startup_video1_codec" ".video1.codec" "$MAJESTIC_STARTUP_VIDEO1_CODEC" || return 1
-    feature_cli_set_string "startup_video1_size" ".video1.size" "$MAJESTIC_STARTUP_VIDEO1_SIZE" || return 1
-    feature_cli_set_number "startup_video1_fps" ".video1.fps" "$MAJESTIC_STARTUP_VIDEO1_FPS" || return 1
-    feature_cli_set_number "startup_video1_bitrate" ".video1.bitrate" "$MAJESTIC_STARTUP_VIDEO1_BITRATE" || return 1
+    encoder_startup_apply_video_profile
 }
 
 feature_startup_apply_record_profile() {
-    log_debug "restore startup record profile enabled=$MAJESTIC_STARTUP_RECORDS_ENABLED path=$MAJESTIC_STARTUP_RECORDS_PATH split=$MAJESTIC_STARTUP_RECORDS_SPLIT maxUsage=$MAJESTIC_STARTUP_RECORDS_MAX_USAGE"
-
-    feature_cli_set_bool "startup_records_enabled" ".records.enabled" "$MAJESTIC_STARTUP_RECORDS_ENABLED" || return 1
-    feature_cli_set_string "startup_records_path" ".records.path" "$MAJESTIC_STARTUP_RECORDS_PATH" || return 1
-    feature_cli_set_number "startup_records_split" ".records.split" "$MAJESTIC_STARTUP_RECORDS_SPLIT" || return 1
-    feature_cli_set_number "startup_records_maxUsage" ".records.maxUsage" "$MAJESTIC_STARTUP_RECORDS_MAX_USAGE" || return 1
+    encoder_startup_apply_record_profile
 }
 
 feature_startup_apply_outgoing_profile() {
     # outgoing.server 必须清空，避免重启后沿用上一次动态推流地址。
-    log_debug "restore startup outgoing profile enabled=$MAJESTIC_STARTUP_OUTGOING_ENABLED substream=$MAJESTIC_STARTUP_OUTGOING_SUBSTREAM"
-
-    feature_cli_set_string "startup_outgoing_server" ".outgoing.server" "$MAJESTIC_STARTUP_OUTGOING_SERVER" || return 1
-    feature_cli_set_bool "startup_outgoing_substream" ".outgoing.substream" "$MAJESTIC_STARTUP_OUTGOING_SUBSTREAM" || return 1
-    feature_cli_set_bool "startup_outgoing_enabled" ".outgoing.enabled" "$MAJESTIC_STARTUP_OUTGOING_ENABLED" || return 1
+    encoder_startup_apply_outgoing_profile
 }
 
 feature_reload_stream_service() {
@@ -394,40 +373,10 @@ feature_reload_stream_service() {
 
 feature_restore_startup_media() {
     # main 每次重新启动时，把 Majestic 恢复到脚本定义的空闲默认配置。
-    [ "$MAJESTIC_STARTUP_RESET_ENABLED" = "true" ] || return 0
-
-    ensure_layout
-    ensure_runtime_files
-
-    restore_code=0
-    log_info_tag "MAJESTIC" "restore startup media profile begin"
-
+    encoder_restore_startup_media_profile "${1:-feature_restore}"
+    restore_rc=$?
     stop_pidfile_process "$SEGMENT_WORKER_PID_FILE"
-
-    feature_startup_apply_record_profile || restore_code=1
-    feature_startup_apply_outgoing_profile || restore_code=1
-    feature_startup_apply_video_profile || restore_code=1
-    feature_reload_stream_service || restore_code=1
-
-    state_set_recording false
-    state_set_publishing false
-    state_set_record_start_ts 0
-    state_clear_record_session_time
-    state_reset_segment_no
-    state_reset_segment_manifest
-    state_clear_current_record_id
-    state_clear_current_record_flow
-    state_clear_current_stream_url
-    state_clear_current_task_id
-    state_recompute_idle
-
-    if [ "$restore_code" = "0" ]; then
-        log_info_tag "MAJESTIC" "restore startup media profile success"
-        return 0
-    fi
-
-    log_error_tag "MAJESTIC" "restore startup media profile failed"
-    return 1
+    return "$restore_rc"
 }
 
 feature_stream_start() {
@@ -569,8 +518,9 @@ feature_record_segment_loop() {
     ensure_layout
     state_init
     ensure_runtime_files
+    encoder_exit_if_main_stopped "segment_worker"
 
-    if ! claim_pidfile "$SEGMENT_WORKER_PID_FILE"; then
+    if ! claim_pidfile "$SEGMENT_WORKER_PID_FILE" "app_service.sh segment_worker"; then
         log_warn "segment worker already running"
         exit 0
     fi
@@ -579,6 +529,7 @@ feature_record_segment_loop() {
     log_debug "segment worker start mode=$mode task_id=$task_id record_id=$record_id"
 
     while [ "$(state_get_recording)" = "true" ] && [ "$(state_get_current_record_id)" = "$record_id" ]; do
+        encoder_exit_if_main_stopped "segment_worker"
         feature_record_upload_pending_segments "$mode" "$record_id"
         sleep "$SEGMENT_SCAN_INTERVAL_SEC"
     done

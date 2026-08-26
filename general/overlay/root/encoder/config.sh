@@ -50,6 +50,9 @@ get_device_version() {
 
 DEVICE_VERSION=$(get_device_version)
 
+# 本地显示时区。协议里的 timestamp 仍然使用 epoch 毫秒，这里只影响 date 显示、日志和文件名。
+LOCAL_TIMEZONE="CST-8" # POSIX 时区写法，CST-8 表示中国标准时间 UTC+8。
+
 # 控制服务的 MQTT 连接参数。
 # 订阅 topic 会绑定当前 DEVICE_ID，因此 device_id 变化后 topic 也会自动变化。
 MQTT_HOST="192.168.250.100" # MQTT 服务器地址。
@@ -73,6 +76,8 @@ SEGMENT_STABLE_SEC="20" # 文件保持不变达到该时长后，才视为可上
 RECORD_FINALIZE_WAIT_SEC="3" # 停止录像后等待最终文件落盘的时间。
 CURL_CONNECT_TIMEOUT_SEC="10" # FTP 上传连接超时时间。
 CURL_UPLOAD_MAX_TIME_SEC="60" # 单个文件 FTP 上传最长执行时间。
+CHILD_EXIT_CHECK_SEC="1" # 主进程丢失后，子服务检查退出条件的间隔。
+CHILD_EXIT_WAIT_SEC="15" # 自启动前等待旧子服务全部退出的最长时间。
 
 BATTERY_REFRESH_ENABLED="true" # 是否在每次心跳前读取真实电量与充电状态。
 BATTERY_I2C_BUS="1" # 库仑计 I2C 总线编号。
@@ -209,6 +214,7 @@ VOICE_PLAYER_PID_FILE="${STATE_DIR}/voice_player.pid" # 语音播报 worker PID 
 LED_UPLOAD_BLINK_PID_FILE="${STATE_DIR}/led_upload_blink.pid" # 上传绿灯闪烁 worker PID 文件。
 LED_UPLOAD_TOKEN_DIR="${STATE_DIR}/led_upload_tokens" # 当前上传动作的内部 token 目录。
 LED_I2C_LOCK_DIR="${STATE_DIR}/led_i2c.lock" # 灯控 I2C 写入锁目录。
+MAIN_STOPPED_RESTORE_LOCK_DIR="${STATE_DIR}/main_stopped_restore.lock" # 主进程丢失时，子服务恢复 Majestic 的互斥锁。
 
 # 状态文件。心跳、配置页、业务流程都通过 state.sh 统一访问这些文件。
 STATE_IDLE_FILE="${STATE_DIR}/is_idle" # 是否空闲状态文件。
@@ -234,6 +240,7 @@ MQTT_PORT
 MQTT_USER
 MQTT_PASS
 MQTT_QOS
+LOCAL_TIMEZONE
 HEARTBEAT_INTERVAL_SEC
 REGISTER_ACK_TIMEOUT_SEC
 REGISTER_RETRY_INTERVAL_SEC
@@ -242,6 +249,8 @@ SEGMENT_STABLE_SEC
 RECORD_FINALIZE_WAIT_SEC
 CURL_CONNECT_TIMEOUT_SEC
 CURL_UPLOAD_MAX_TIME_SEC
+CHILD_EXIT_CHECK_SEC
+CHILD_EXIT_WAIT_SEC
 RECORD_FILE_TIME_FORMAT
 RECORD_FILE_NAME_TEMPLATE
 RECORD_PATH

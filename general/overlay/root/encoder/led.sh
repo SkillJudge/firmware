@@ -154,7 +154,8 @@ led_idle_indicator_sync() {
 
 led_upload_blink_worker() {
     led_upload_tokens_prepare
-    if ! claim_pidfile "$LED_UPLOAD_BLINK_PID_FILE"; then
+    encoder_exit_if_main_stopped "led_upload_blink"
+    if ! claim_pidfile "$LED_UPLOAD_BLINK_PID_FILE" "led.sh upload_blink_worker"; then
         exit 0
     fi
 
@@ -163,6 +164,7 @@ led_upload_blink_worker() {
     log_debug_tag "LED" "upload blink worker start"
 
     while true; do
+        encoder_exit_if_main_stopped "led_upload_blink"
         led_upload_prune_expired_tokens
         if led_upload_has_tokens; then
             led_upload_on
@@ -198,19 +200,21 @@ led_sync_business_state() {
 
 led_sync_business_after_delay() {
     sleep "$LED_STATUS_DELAY_SEC"
-    is_pid_running_file "$MAIN_PID_FILE" || return 0
+    encoder_exit_if_main_stopped "led_sync"
     led_sync_business_state
 }
 
 led_schedule_business_sync() {
     [ "$LED_ENABLED" = "true" ] || return 0
+    encoder_main_is_running || return 0
     sh "$APP_HOME/led.sh" sync_business_after_delay >/dev/null 2>&1 &
 }
 
 led_upload_worker_start() {
     [ "$LED_ENABLED" = "true" ] || return 0
+    encoder_main_is_running || return 0
     led_upload_tokens_prepare
-    if is_pid_running_file "$LED_UPLOAD_BLINK_PID_FILE"; then
+    if is_pid_running_file "$LED_UPLOAD_BLINK_PID_FILE" "led.sh upload_blink_worker"; then
         return 0
     fi
 

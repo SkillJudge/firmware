@@ -48,16 +48,37 @@ current_now_ms() {
     echo $((base_ms + offset_ms))
 }
 
+normalize_timestamp_to_ms() {
+    timestamp_value="$1"
+    case "$timestamp_value" in
+        ''|*[!0-9]*)
+            return 1
+            ;;
+    esac
+
+    # 协议定义为毫秒；现场服务偶尔下发 10 位秒级时间，这里兼容转换。
+    if [ "$timestamp_value" -lt 100000000000 ]; then
+        echo $((timestamp_value * 1000))
+    else
+        echo "$timestamp_value"
+    fi
+}
+
 sync_time_from_timestamp_ms() {
     # 云端 registerAck 中的 timestamp 用来计算偏移，不直接修改系统时间。
-    server_ms="$1"
-    [ -n "$server_ms" ] || return 1
+    server_raw="$1"
+    [ -n "$server_raw" ] || return 1
+
+    server_ms=$(normalize_timestamp_to_ms "$server_raw") || {
+        log_warn "register ack timestamp invalid: $server_raw"
+        return 1
+    }
 
     base_ms=$(raw_now_ms)
     offset_ms=$((server_ms - base_ms))
     runtime_write_value "$TIME_OFFSET_FILE" "$offset_ms"
     runtime_write_value "$SERVER_TIMESTAMP_FILE" "$server_ms"
-    log_info "time sync applied server_ms=$server_ms offset_ms=$offset_ms"
+    log_info "time sync applied server_raw=$server_raw server_ms=$server_ms offset_ms=$offset_ms"
     return 0
 }
 

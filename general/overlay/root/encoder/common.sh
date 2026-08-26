@@ -5,6 +5,15 @@
 SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 . "$SCRIPT_DIR/config.sh"
 
+apply_local_timezone() {
+    # 只影响 date 的本地显示，不改变协议 timestamp 的 epoch 毫秒语义。
+    [ -n "$LOCAL_TIMEZONE" ] || return 0
+    TZ="$LOCAL_TIMEZONE"
+    export TZ
+}
+
+apply_local_timezone
+
 ensure_layout() {
     # 所有脚本启动前都可以重复调用，确保运行目录存在并初始化 msgId 文件。
     mkdir -p "$WORKDIR" "$STATE_DIR" "$LOG_DIR" "$TMP_DIR" "$RECORD_NAMED_LOCAL_DIR" "$CAPTURE_LOCAL_DIR" "$AUDIO_LOCAL_DIR"
@@ -351,6 +360,183 @@ stream_service_reload_or_recover() {
     fi
 
     return "$reload_rc"
+}
+
+encoder_yaml_set() {
+    label="$1"
+    key="$2"
+    value="$3"
+
+    require_command yaml-cli || return 1
+    quoted_config_file=$(shell_quote "$STREAM_CONFIG_FILE")
+    run_config_command "$label" "yaml-cli -i $quoted_config_file -s $key $value"
+}
+
+encoder_yaml_set_bool() {
+    encoder_yaml_set "$1" "$2" "$3"
+}
+
+encoder_yaml_set_number() {
+    encoder_yaml_set "$1" "$2" "$3"
+}
+
+encoder_yaml_set_string() {
+    label="$1"
+    key="$2"
+    value="$3"
+    quoted_value=$(shell_quote "$value")
+    encoder_yaml_set "$label" "$key" "$quoted_value"
+}
+
+encoder_startup_apply_video_profile() {
+    log_debug "restore startup video profile video0=${MAJESTIC_STARTUP_VIDEO0_ENABLED}/${MAJESTIC_STARTUP_VIDEO0_SIZE}/${MAJESTIC_STARTUP_VIDEO0_FPS} video1=${MAJESTIC_STARTUP_VIDEO1_ENABLED}/${MAJESTIC_STARTUP_VIDEO1_SIZE}/${MAJESTIC_STARTUP_VIDEO1_FPS}"
+
+    encoder_yaml_set_bool "startup_video0_enabled" ".video0.enabled" "$MAJESTIC_STARTUP_VIDEO0_ENABLED" || return 1
+    encoder_yaml_set_string "startup_video0_codec" ".video0.codec" "$MAJESTIC_STARTUP_VIDEO0_CODEC" || return 1
+    encoder_yaml_set_string "startup_video0_size" ".video0.size" "$MAJESTIC_STARTUP_VIDEO0_SIZE" || return 1
+    encoder_yaml_set_number "startup_video0_fps" ".video0.fps" "$MAJESTIC_STARTUP_VIDEO0_FPS" || return 1
+    encoder_yaml_set_number "startup_video0_bitrate" ".video0.bitrate" "$MAJESTIC_STARTUP_VIDEO0_BITRATE" || return 1
+
+    encoder_yaml_set_bool "startup_video1_enabled" ".video1.enabled" "$MAJESTIC_STARTUP_VIDEO1_ENABLED" || return 1
+    encoder_yaml_set_string "startup_video1_codec" ".video1.codec" "$MAJESTIC_STARTUP_VIDEO1_CODEC" || return 1
+    encoder_yaml_set_string "startup_video1_size" ".video1.size" "$MAJESTIC_STARTUP_VIDEO1_SIZE" || return 1
+    encoder_yaml_set_number "startup_video1_fps" ".video1.fps" "$MAJESTIC_STARTUP_VIDEO1_FPS" || return 1
+    encoder_yaml_set_number "startup_video1_bitrate" ".video1.bitrate" "$MAJESTIC_STARTUP_VIDEO1_BITRATE" || return 1
+}
+
+encoder_startup_apply_record_profile() {
+    log_debug "restore startup record profile enabled=$MAJESTIC_STARTUP_RECORDS_ENABLED path=$MAJESTIC_STARTUP_RECORDS_PATH split=$MAJESTIC_STARTUP_RECORDS_SPLIT maxUsage=$MAJESTIC_STARTUP_RECORDS_MAX_USAGE"
+
+    encoder_yaml_set_bool "startup_records_enabled" ".records.enabled" "$MAJESTIC_STARTUP_RECORDS_ENABLED" || return 1
+    encoder_yaml_set_string "startup_records_path" ".records.path" "$MAJESTIC_STARTUP_RECORDS_PATH" || return 1
+    encoder_yaml_set_number "startup_records_split" ".records.split" "$MAJESTIC_STARTUP_RECORDS_SPLIT" || return 1
+    encoder_yaml_set_number "startup_records_maxUsage" ".records.maxUsage" "$MAJESTIC_STARTUP_RECORDS_MAX_USAGE" || return 1
+}
+
+encoder_startup_apply_outgoing_profile() {
+    log_debug "restore startup outgoing profile enabled=$MAJESTIC_STARTUP_OUTGOING_ENABLED substream=$MAJESTIC_STARTUP_OUTGOING_SUBSTREAM"
+
+    encoder_yaml_set_string "startup_outgoing_server" ".outgoing.server" "$MAJESTIC_STARTUP_OUTGOING_SERVER" || return 1
+    encoder_yaml_set_bool "startup_outgoing_substream" ".outgoing.substream" "$MAJESTIC_STARTUP_OUTGOING_SUBSTREAM" || return 1
+    encoder_yaml_set_bool "startup_outgoing_enabled" ".outgoing.enabled" "$MAJESTIC_STARTUP_OUTGOING_ENABLED" || return 1
+}
+
+encoder_reset_runtime_media_state() {
+    # 直接写状态文件，避免 common.sh 反向依赖 state.sh 形成循环引用。
+    ensure_layout
+    printf 'true\n' > "$STATE_IDLE_FILE"
+    printf 'false\n' > "$STATE_RECORDING_FILE"
+    printf 'false\n' > "$STATE_PUBLISHING_FILE"
+    printf '0\n' > "$STATE_RECORD_START_TS_FILE"
+    : > "$STATE_RECORD_SESSION_TIME_FILE"
+    printf '0\n' > "$STATE_SEGMENT_NO_FILE"
+    : > "$STATE_SEGMENT_MANIFEST_FILE"
+    : > "$STATE_CURRENT_RECORD_ID_FILE"
+    : > "$STATE_CURRENT_RECORD_FLOW_FILE"
+    : > "$STATE_CURRENT_STREAM_URL_FILE"
+    : > "$STATE_CURRENT_TASK_ID_FILE"
+}
+
+encoder_restore_startup_media_profile() {
+    # 把 Majestic 拉回 firmware 定义的开机空闲配置；调用方再决定是否停止自身或其它子进程。
+    reason="${1:-unknown}"
+    [ "$MAJESTIC_STARTUP_RESET_ENABLED" = "true" ] || return 0
+
+    ensure_layout
+    restore_code=0
+    log_info_tag "MAJESTIC" "restore startup media profile begin reason=$reason"
+
+    encoder_startup_apply_record_profile || restore_code=1
+    encoder_startup_apply_outgoing_profile || restore_code=1
+    encoder_startup_apply_video_profile || restore_code=1
+    stream_service_reload_or_recover "startup_stream_reload" || restore_code=1
+    encoder_reset_runtime_media_state
+
+    if [ "$restore_code" = "0" ]; then
+        log_info_tag "MAJESTIC" "restore startup media profile success reason=$reason"
+        return 0
+    fi
+
+    log_error_tag "MAJESTIC" "restore startup media profile failed reason=$reason"
+    return 1
+}
+
+encoder_main_process_is_running() {
+    ps w 2>/dev/null | awk -v self="$$" '
+        NR > 1 && $1 != self && $0 ~ /encoder_main\.sh/ {
+            found = 1
+        }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+encoder_main_is_running() {
+    is_pid_running_file "$MAIN_PID_FILE" "encoder_main.sh" && return 0
+    encoder_main_process_is_running
+}
+
+encoder_restore_lock_acquire() {
+    ensure_layout
+
+    if mkdir "$MAIN_STOPPED_RESTORE_LOCK_DIR" 2>/dev/null; then
+        printf '%s\n' "$$" > "$MAIN_STOPPED_RESTORE_LOCK_DIR/pid"
+        return 0
+    fi
+
+    lock_owner=$(cat "$MAIN_STOPPED_RESTORE_LOCK_DIR/pid" 2>/dev/null)
+    if [ -n "$lock_owner" ] && kill -0 "$lock_owner" 2>/dev/null; then
+        return 1
+    fi
+
+    rm -rf "$MAIN_STOPPED_RESTORE_LOCK_DIR"
+    mkdir "$MAIN_STOPPED_RESTORE_LOCK_DIR" 2>/dev/null || return 1
+    printf '%s\n' "$$" > "$MAIN_STOPPED_RESTORE_LOCK_DIR/pid"
+}
+
+encoder_restore_lock_release() {
+    [ -d "$MAIN_STOPPED_RESTORE_LOCK_DIR" ] || return 0
+    lock_owner=$(cat "$MAIN_STOPPED_RESTORE_LOCK_DIR/pid" 2>/dev/null)
+    [ "$lock_owner" = "$$" ] || return 0
+    rm -rf "$MAIN_STOPPED_RESTORE_LOCK_DIR"
+}
+
+encoder_restore_lock_wait() {
+    while [ -d "$MAIN_STOPPED_RESTORE_LOCK_DIR" ]; do
+        lock_owner=$(cat "$MAIN_STOPPED_RESTORE_LOCK_DIR/pid" 2>/dev/null)
+        if [ -n "$lock_owner" ] && kill -0 "$lock_owner" 2>/dev/null; then
+            sleep "$CHILD_EXIT_CHECK_SEC"
+            continue
+        fi
+
+        rm -rf "$MAIN_STOPPED_RESTORE_LOCK_DIR"
+        break
+    done
+}
+
+encoder_restore_after_main_stopped() {
+    role="${1:-child}"
+    encoder_main_is_running && return 0
+
+    if encoder_restore_lock_acquire; then
+        log_warn_tag "LIFECYCLE" "$role detected encoder_main.sh missing, restore Majestic before exit"
+        encoder_restore_startup_media_profile "main_stopped:$role"
+        restore_rc=$?
+        encoder_restore_lock_release
+        return "$restore_rc"
+    fi
+
+    log_info_tag "LIFECYCLE" "$role waiting for Majestic restore owned by another child"
+    encoder_restore_lock_wait
+    return 0
+}
+
+encoder_exit_if_main_stopped() {
+    role="${1:-child}"
+    encoder_main_is_running && return 0
+
+    encoder_restore_after_main_stopped "$role"
+    log_warn_tag "LIFECYCLE" "$role exit because encoder_main.sh is not running"
+    exit 0
 }
 
 file_mtime_sec() {

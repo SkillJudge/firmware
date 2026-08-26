@@ -30,6 +30,7 @@ voice_set_output_enabled() {
     # 两者必须同时开启，否则 /play_audio 可能返回 200，但日志会报 ERR_ADEC_UNEXIST 且扬声器无声。
     enabled="$1"
     quoted_config_file=$(shell_quote "$STREAM_CONFIG_FILE")
+    encoder_exit_if_main_stopped "voice"
 
     if [ "$enabled" = "true" ]; then
         quoted_codec=$(shell_quote "$VOICE_CODEC")
@@ -44,6 +45,7 @@ voice_set_output_enabled() {
 
     reload_attempt=1
     while [ "$reload_attempt" -le "$VOICE_RELOAD_RETRY_COUNT" ]; do
+        encoder_exit_if_main_stopped "voice"
         stream_service_reload_or_recover "voice_output_reload_${enabled}_$reload_attempt" || return 1
         sleep "$VOICE_RELOAD_WAIT_SEC"
 
@@ -145,6 +147,7 @@ voice_claim_task_lock() {
     attempt=1
 
     while [ "$attempt" -le "$VOICE_LOCK_RETRY_COUNT" ]; do
+        encoder_exit_if_main_stopped "voice"
         if mkdir "$VOICE_PLAYER_LOCK_DIR" 2>/dev/null; then
             legacy_pid=$(cat "$VOICE_PLAYER_PID_FILE" 2>/dev/null)
 
@@ -226,6 +229,28 @@ voice_wait() {
     return "$rc"
 }
 
+voice_wait_with_main_guard() {
+    total_sec="$1"
+    check_sec="${CHILD_EXIT_CHECK_SEC:-1}"
+
+    case "$check_sec" in
+        ''|*[!0-9]*|0)
+            check_sec=1
+            ;;
+    esac
+
+    waited_sec=0
+    while [ "$waited_sec" -lt "$total_sec" ]; do
+        encoder_exit_if_main_stopped "voice"
+        remaining_sec=$((total_sec - waited_sec))
+        sleep_sec="$check_sec"
+        [ "$sleep_sec" -le "$remaining_sec" ] || sleep_sec="$remaining_sec"
+        [ "$sleep_sec" -gt 0 ] || break
+        voice_wait "$sleep_sec" || return 1
+        waited_sec=$((waited_sec + sleep_sec))
+    done
+}
+
 voice_submit_pcm() {
     # Majestic 接口接收原始 PCM 数据，提交完成后由 voice_wait 预留播放时间。
     err_file="${TMP_DIR}/voice_curl_$$.err"
@@ -254,6 +279,7 @@ voice_play_desk() {
     task_id="$1"
 
     ensure_layout
+    encoder_exit_if_main_stopped "voice"
 
     if [ -z "$task_id" ]; then
         log_error_tag "VOICE" "desk voice task_id missing"
@@ -285,11 +311,13 @@ voice_play_desk() {
     trap 'voice_handle_signal 130' INT
     trap 'voice_handle_signal 143' TERM
 
+    encoder_exit_if_main_stopped "voice"
     voice_set_output_enabled true || return 1
     log_info_tag "VOICE" "desk voice start task_id=$task_id repeat=$VOICE_REPEAT_COUNT file=$VOICE_DESK_PCM_FILE"
 
     current=1
     while [ "$current" -le "$VOICE_REPEAT_COUNT" ]; do
+        encoder_exit_if_main_stopped "voice"
         if ! voice_submit_pcm; then
             log_error_tag "VOICE" "desk voice play failed task_id=$task_id repeat=$current"
             return 1
@@ -297,9 +325,9 @@ voice_play_desk() {
 
         log_debug_tag "VOICE" "desk voice submitted task_id=$task_id repeat=$current"
         # 先等待当前 PCM 播放完毕，再追加可配置的空白间隔。
-        voice_wait "$VOICE_AUDIO_DURATION_SEC" || return 1
+        voice_wait_with_main_guard "$VOICE_AUDIO_DURATION_SEC" || return 1
         if [ "$current" -lt "$VOICE_REPEAT_COUNT" ]; then
-            voice_wait "$VOICE_GAP_SEC" || return 1
+            voice_wait_with_main_guard "$VOICE_GAP_SEC" || return 1
         fi
         current=$((current + 1))
     done
