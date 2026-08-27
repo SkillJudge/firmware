@@ -16,7 +16,7 @@ apply_local_timezone
 
 ensure_layout() {
     # 所有脚本启动前都可以重复调用，确保运行目录存在并初始化 msgId 文件。
-    mkdir -p "$WORKDIR" "$STATE_DIR" "$LOG_DIR" "$TMP_DIR" "$RECORD_NAMED_LOCAL_DIR" "$CAPTURE_LOCAL_DIR" "$AUDIO_LOCAL_DIR"
+    mkdir -p "$WORKDIR" "$STATE_DIR" "$LOG_DIR" "$TMP_DIR" "$RECORD_NAMED_LOCAL_DIR" "$CAPTURE_LOCAL_DIR" "$AUDIO_LOCAL_DIR" "$COMMAND_CACHE_DIR"
     [ -f "$MSGID_FILE" ] || echo 1000 > "$MSGID_FILE"
 }
 
@@ -165,13 +165,92 @@ ensure_device_id_configured() {
 }
 
 next_msgid() {
-    # 消息 ID（MQTT msgId）简单递增并落盘，重启后继续从上次值往后走。
+    # 心跳、注册和分片 worker 可能并发取号，用 mkdir 锁保证递增不重复。
     ensure_layout
+    while ! mkdir "$MSGID_LOCK_DIR" 2>/dev/null; do
+        msgid_owner=$(cat "$MSGID_LOCK_DIR/pid" 2>/dev/null)
+        if [ -z "$msgid_owner" ]; then
+            sleep 1
+            msgid_owner=$(cat "$MSGID_LOCK_DIR/pid" 2>/dev/null)
+        fi
+        if [ -z "$msgid_owner" ] || ! kill -0 "$msgid_owner" 2>/dev/null; then
+            rm -f "$MSGID_LOCK_DIR/pid"
+            rmdir "$MSGID_LOCK_DIR" 2>/dev/null
+            continue
+        fi
+        sleep 1
+    done
+    printf '%s\n' "$$" > "$MSGID_LOCK_DIR/pid"
     n=$(cat "$MSGID_FILE" 2>/dev/null)
     [ -n "$n" ] || n=1000
     n=$((n + 1))
     printf '%s\n' "$n" > "$MSGID_FILE"
+    rm -f "$MSGID_LOCK_DIR/pid"
+    rmdir "$MSGID_LOCK_DIR" 2>/dev/null
     printf '%s\n' "$n"
+}
+
+majestic_lock_acquire() {
+    # 所有 yaml 修改、HUP 和就绪检查必须处于同一把锁内，避免语音/推流/录像交叉重载。
+    ensure_layout
+    lock_attempt=1
+    while [ "$lock_attempt" -le "$MAJESTIC_LOCK_RETRY_COUNT" ]; do
+        if mkdir "$MAJESTIC_CONFIG_LOCK_DIR" 2>/dev/null; then
+            printf '%s\n' "$$" > "$MAJESTIC_CONFIG_LOCK_DIR/pid"
+            return 0
+        fi
+
+        lock_owner=$(cat "$MAJESTIC_CONFIG_LOCK_DIR/pid" 2>/dev/null)
+        if [ -z "$lock_owner" ]; then
+            sleep 1
+            lock_owner=$(cat "$MAJESTIC_CONFIG_LOCK_DIR/pid" 2>/dev/null)
+        fi
+        if [ -z "$lock_owner" ] || ! kill -0 "$lock_owner" 2>/dev/null; then
+            rm -f "$MAJESTIC_CONFIG_LOCK_DIR/pid"
+            rmdir "$MAJESTIC_CONFIG_LOCK_DIR" 2>/dev/null
+            continue
+        fi
+
+        sleep "$MAJESTIC_LOCK_RETRY_SEC"
+        lock_attempt=$((lock_attempt + 1))
+    done
+
+    log_error_tag "MAJESTIC" "config lock timeout owner_pid=${lock_owner:-unknown}"
+    return 1
+}
+
+majestic_lock_release() {
+    [ -d "$MAJESTIC_CONFIG_LOCK_DIR" ] || return 0
+    lock_owner=$(cat "$MAJESTIC_CONFIG_LOCK_DIR/pid" 2>/dev/null)
+    [ "$lock_owner" = "$$" ] || return 0
+    rm -f "$MAJESTIC_CONFIG_LOCK_DIR/pid"
+    rmdir "$MAJESTIC_CONFIG_LOCK_DIR" 2>/dev/null
+}
+
+business_action_lock_acquire() {
+    ensure_layout
+    while ! mkdir "$BUSINESS_ACTION_LOCK_DIR" 2>/dev/null; do
+        action_owner=$(cat "$BUSINESS_ACTION_LOCK_DIR/pid" 2>/dev/null)
+        if [ -z "$action_owner" ]; then
+            sleep 1
+            action_owner=$(cat "$BUSINESS_ACTION_LOCK_DIR/pid" 2>/dev/null)
+        fi
+        if [ -z "$action_owner" ] || ! kill -0 "$action_owner" 2>/dev/null; then
+            rm -f "$BUSINESS_ACTION_LOCK_DIR/pid"
+            rmdir "$BUSINESS_ACTION_LOCK_DIR" 2>/dev/null
+            continue
+        fi
+        sleep 1
+    done
+    printf '%s\n' "$$" > "$BUSINESS_ACTION_LOCK_DIR/pid"
+}
+
+business_action_lock_release() {
+    [ -d "$BUSINESS_ACTION_LOCK_DIR" ] || return 0
+    action_owner=$(cat "$BUSINESS_ACTION_LOCK_DIR/pid" 2>/dev/null)
+    [ "$action_owner" = "$$" ] || return 0
+    rm -f "$BUSINESS_ACTION_LOCK_DIR/pid"
+    rmdir "$BUSINESS_ACTION_LOCK_DIR" 2>/dev/null
 }
 
 get_ip_addr() {
@@ -446,13 +525,19 @@ encoder_restore_startup_media_profile() {
     restore_code=0
     log_info_tag "MAJESTIC" "restore startup media profile begin reason=$reason"
 
+    if ! majestic_lock_acquire; then
+        log_error_tag "MAJESTIC" "restore startup media profile lock failed reason=$reason"
+        return 1
+    fi
+
     encoder_startup_apply_record_profile || restore_code=1
     encoder_startup_apply_outgoing_profile || restore_code=1
     encoder_startup_apply_video_profile || restore_code=1
     stream_service_reload_or_recover "startup_stream_reload" || restore_code=1
-    encoder_reset_runtime_media_state
+    majestic_lock_release
 
     if [ "$restore_code" = "0" ]; then
+        encoder_reset_runtime_media_state
         log_info_tag "MAJESTIC" "restore startup media profile success reason=$reason"
         return 0
     fi

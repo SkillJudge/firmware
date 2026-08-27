@@ -74,6 +74,8 @@ REGISTER_RETRY_INTERVAL_SEC="5" # 注册失败后的重试间隔。
 SEGMENT_SCAN_INTERVAL_SEC="10" # 录像分片扫描间隔。
 SEGMENT_STABLE_SEC="20" # 文件保持不变达到该时长后，才视为可上传分片。
 RECORD_FINALIZE_WAIT_SEC="3" # 停止录像后等待最终文件落盘的时间。
+RECORD_START_VERIFY_TIMEOUT_SEC="10" # 开启录像后等待首个新 MP4 落盘的最长时间。
+RECORD_START_VERIFY_INTERVAL_SEC="1" # 检查首个新 MP4 的间隔。
 CURL_CONNECT_TIMEOUT_SEC="10" # FTP 上传连接超时时间。
 CURL_UPLOAD_MAX_TIME_SEC="60" # 单个文件 FTP 上传最长执行时间。
 CHILD_EXIT_CHECK_SEC="1" # 主进程丢失后，子服务检查退出条件的间隔。
@@ -161,6 +163,8 @@ STREAM_SERVICE_START_CMD="/etc/init.d/S95majestic start" # Majestic 异常退出
 STREAM_RELOAD_CMD="killall -HUP majestic" # 修改 Majestic 配置后的重载命令。
 STREAM_RELOAD_WAIT_SEC="2" # 重载后等待进程稳定的时间。
 STREAM_START_WAIT_SEC="2" # 异常恢复启动后等待进程就绪的时间。
+MAJESTIC_LOCK_RETRY_SEC="1" # 修改 Majestic 配置前等待全局互斥锁的间隔。
+MAJESTIC_LOCK_RETRY_COUNT="30" # 修改 Majestic 配置时获取全局互斥锁的最大次数。
 MAJESTIC_STARTUP_RESET_ENABLED="true" # main 每次启动时是否恢复 Majestic 到脚本默认空闲配置。
 MAJESTIC_STARTUP_VIDEO0_ENABLED="true" # firmware 自启动默认：主码流启用。
 MAJESTIC_STARTUP_VIDEO0_CODEC="h264" # firmware 自启动默认：主码流编码。
@@ -194,6 +198,7 @@ TMP_DIR="${WORKDIR}/tmp" # 临时文件目录。
 RECORD_NAMED_LOCAL_DIR="${WORKDIR}/named_records" # 上传前标准命名录像的临时目录。
 LOGFILE="${LOG_DIR}/encoder.log" # 主日志文件。
 MSGID_FILE="${STATE_DIR}/msgid" # MQTT 消息 ID 持久化文件。
+MSGID_LOCK_DIR="${STATE_DIR}/msgid.lock" # 心跳、注册、分片上报共享的 msgId 互斥锁。
 TIME_OFFSET_FILE="${STATE_DIR}/time_offset_ms" # 服务端与板端时间差文件。
 SERVER_TIMESTAMP_FILE="${STATE_DIR}/server_timestamp_ms" # 最近一次服务端时间戳文件。
 RUNTIME_FTP_HOST_FILE="${STATE_DIR}/runtime_ftp_host" # 注册 ACK 下发的 FTP 地址文件。
@@ -210,11 +215,16 @@ MAIN_PID_FILE="${STATE_DIR}/encoder_main.pid" # 主控制器进程 PID 文件。
 LISTENER_PID_FILE="${STATE_DIR}/listener.pid" # MQTT 监听进程 PID 文件。
 HEARTBEAT_PID_FILE="${STATE_DIR}/heartbeat.pid" # 心跳进程 PID 文件。
 SEGMENT_WORKER_PID_FILE="${STATE_DIR}/segment_worker.pid" # 录像分片上传 worker PID 文件。
+DURATION_WORKER_PID_FILE="${STATE_DIR}/duration_worker.pid" # 推流 duration 到时自动 reset 的 worker PID 文件。
 VOICE_PLAYER_PID_FILE="${STATE_DIR}/voice_player.pid" # 语音播报 worker PID 文件。
 LED_UPLOAD_BLINK_PID_FILE="${STATE_DIR}/led_upload_blink.pid" # 上传绿灯闪烁 worker PID 文件。
 LED_UPLOAD_TOKEN_DIR="${STATE_DIR}/led_upload_tokens" # 当前上传动作的内部 token 目录。
 LED_I2C_LOCK_DIR="${STATE_DIR}/led_i2c.lock" # 灯控 I2C 写入锁目录。
 MAIN_STOPPED_RESTORE_LOCK_DIR="${STATE_DIR}/main_stopped_restore.lock" # 主进程丢失时，子服务恢复 Majestic 的互斥锁。
+MAJESTIC_CONFIG_LOCK_DIR="${STATE_DIR}/majestic_config.lock" # 语音、推流、录像共享的 Majestic 配置互斥锁。
+BUSINESS_ACTION_LOCK_DIR="${STATE_DIR}/business_action.lock" # MQTT 命令和 duration reset 的业务状态互斥锁。
+COMMAND_CACHE_DIR="${STATE_DIR}/command_cache" # 已执行 MQTT 命令及 ACK 缓存目录。
+COMMAND_CACHE_MAX_ENTRIES="128" # 最多保留的 MQTT 幂等记录数。
 
 # 状态文件。心跳、配置页、业务流程都通过 state.sh 统一访问这些文件。
 STATE_IDLE_FILE="${STATE_DIR}/is_idle" # 是否空闲状态文件。
@@ -232,6 +242,12 @@ STATE_RECORD_START_TS_FILE="${STATE_DIR}/record_start_ts" # 当前录像开始�
 STATE_RECORD_SESSION_TIME_FILE="${STATE_DIR}/record_session_time" # 当前录像会话时间文本文件。
 STATE_SEGMENT_NO_FILE="${STATE_DIR}/segment_no" # 当前录像分片序号文件。
 STATE_SEGMENT_MANIFEST_FILE="${STATE_DIR}/segment_manifest" # 已上传录像分片清单文件。
+STATE_LAST_RECORD_ID_FILE="${STATE_DIR}/last_record_id" # 最近一次成功停止并上传的录像 ID。
+STATE_LAST_RECORD_TASK_ID_FILE="${STATE_DIR}/last_record_task_id" # 最近一次成功录像所属任务 ID。
+STATE_LAST_RECORD_FILE_NAME_FILE="${STATE_DIR}/last_record_file_name" # 最近一次最终分片文件名。
+STATE_LAST_RECORD_FILE_URL_FILE="${STATE_DIR}/last_record_file_url" # 最近一次最终分片 URL。
+STATE_LAST_RECORD_FILE_SIZE_FILE="${STATE_DIR}/last_record_file_size" # 最近一次最终分片大小。
+STATE_LAST_RECORD_SEGMENT_NO_FILE="${STATE_DIR}/last_record_segment_no" # 最近一次最终分片序号。
 
 # 配置页允许修改的字段白名单，避免误改内部路径或派生变量。
 CONFIG_EDITABLE_KEYS="
@@ -247,6 +263,8 @@ REGISTER_RETRY_INTERVAL_SEC
 SEGMENT_SCAN_INTERVAL_SEC
 SEGMENT_STABLE_SEC
 RECORD_FINALIZE_WAIT_SEC
+RECORD_START_VERIFY_TIMEOUT_SEC
+RECORD_START_VERIFY_INTERVAL_SEC
 CURL_CONNECT_TIMEOUT_SEC
 CURL_UPLOAD_MAX_TIME_SEC
 CHILD_EXIT_CHECK_SEC
@@ -288,6 +306,8 @@ STREAM_SERVICE_START_CMD
 STREAM_RELOAD_CMD
 STREAM_RELOAD_WAIT_SEC
 STREAM_START_WAIT_SEC
+MAJESTIC_LOCK_RETRY_SEC
+MAJESTIC_LOCK_RETRY_COUNT
 MAJESTIC_STARTUP_RESET_ENABLED
 MAJESTIC_STARTUP_VIDEO0_ENABLED
 MAJESTIC_STARTUP_VIDEO0_CODEC

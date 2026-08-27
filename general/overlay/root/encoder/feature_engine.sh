@@ -310,7 +310,7 @@ feature_media_apply_video_profile() {
 }
 
 feature_media_disable_all_video() {
-    # 按 V-2.5 需求，停止推流或停止录像时同时关闭 video0/video1。
+    # 只在 stopStream/reset 阶段关闭 video0/video1；stopRecord 必须保留推流视频链路。
     log_info "disable all video streams video0=false video1=false"
     feature_cli_set_bool "video0_enabled" ".video0.enabled" false || return 1
     feature_cli_set_bool "video1_enabled" ".video1.enabled" false || return 1
@@ -376,7 +376,66 @@ feature_restore_startup_media() {
     encoder_restore_startup_media_profile "${1:-feature_restore}"
     restore_rc=$?
     stop_pidfile_process "$SEGMENT_WORKER_PID_FILE"
+    stop_pidfile_process "$DURATION_WORKER_PID_FILE"
     return "$restore_rc"
+}
+
+feature_duration_cancel() {
+    duration_pid=$(cat "$DURATION_WORKER_PID_FILE" 2>/dev/null)
+    if [ "$duration_pid" = "$$" ]; then
+        rm -f "$DURATION_WORKER_PID_FILE"
+        return 0
+    fi
+    stop_pidfile_process "$DURATION_WORKER_PID_FILE"
+}
+
+feature_duration_start() {
+    duration_sec="$1"
+    duration_task_id="$2"
+    duration_stream_url="$3"
+    feature_duration_cancel
+
+    case "$duration_sec" in
+        ''|*[!0-9]*|0)
+            return 0
+            ;;
+    esac
+
+    sh "$APP_HOME/app_service.sh" duration_worker "$duration_sec" "$duration_task_id" "$duration_stream_url" &
+    duration_worker_pid=$!
+    # 先登记子进程，避免紧随其后的新命令在 worker 自己 claim pidfile 前漏掉旧定时器。
+    printf '%s\n' "$duration_worker_pid" > "$DURATION_WORKER_PID_FILE"
+}
+
+feature_duration_loop() {
+    duration_sec="$1"
+    expected_task_id="$2"
+    expected_stream_url="$3"
+
+    ensure_layout
+    state_init
+    if ! claim_pidfile "$DURATION_WORKER_PID_FILE" "app_service.sh duration_worker"; then
+        exit 0
+    fi
+    trap 'release_pidfile_if_owner "$DURATION_WORKER_PID_FILE"' EXIT INT TERM
+
+    elapsed_sec=0
+    while [ "$elapsed_sec" -lt "$duration_sec" ]; do
+        encoder_exit_if_main_stopped "duration_worker"
+        sleep 1
+        elapsed_sec=$((elapsed_sec + 1))
+    done
+
+    business_action_lock_acquire || exit 1
+    trap 'business_action_lock_release; release_pidfile_if_owner "$DURATION_WORKER_PID_FILE"' EXIT INT TERM
+    if [ "$(state_get_publishing)" = "true" ] && [ "$(state_get_current_stream_url)" = "$expected_stream_url" ]; then
+        current_task_id=$(state_get_current_task_id)
+        log_warn "stream duration expired duration=${duration_sec}s task_id=${expected_task_id:-$current_task_id}; execute reset"
+        feature_reset_execute "${expected_task_id:-$current_task_id}"
+    else
+        log_info "duration worker ignored stale timer stream_url=$expected_stream_url"
+    fi
+    business_action_lock_release
 }
 
 feature_stream_start() {
@@ -401,23 +460,47 @@ feature_stream_start() {
         return 1
     fi
 
+    if [ "$(state_get_recording)" = "true" ]; then
+        active_stream_url=$(state_get_current_stream_url)
+        if [ "$(state_get_publishing)" = "true" ] && [ "$active_stream_url" = "$push_url" ]; then
+            # 录像期间相同推流只返回当前结果，不刷新 duration、不覆盖任务，也不重载 Majestic。
+            RESULT_TASK_ID=$(state_get_current_task_id)
+            feature_result_success 0 "streaming"
+            log_warn "stream start ignored during active record because requested stream is already running stream_url=$push_url record_id=$(state_get_current_record_id)"
+            return 0
+        fi
+
+        feature_result_failure -1 "fail"
+        log_error "stream start rejected during active record requested_stream_url=$push_url active_stream_url=$active_stream_url record_id=$(state_get_current_record_id)"
+        return 1
+    fi
+
     log_info "stream start request mode=$mode stream_url=$push_url"
 
     if [ "$(state_get_publishing)" = "true" ] && [ "$(state_get_current_stream_url)" = "$push_url" ]; then
         log_warn "stream already running on requested url, forcing reload to refresh connection"
     fi
 
+    if ! majestic_lock_acquire; then
+        feature_result_failure -1 "fail"
+        return 1
+    fi
+
     if feature_media_apply_video_profile && feature_stream_apply_outgoing_profile "$push_url" && feature_reload_stream_service; then
+        majestic_lock_release
         sleep 3
         state_set_publishing true
         state_set_current_stream_url "$push_url"
         [ -n "$task_id" ] && state_set_current_task_id "$task_id"
         state_recompute_idle
+        feature_duration_start "$duration" "$task_id" "$push_url"
         feature_result_success 0 "streaming"
         log_info "stream start success mode=$mode stream_url=$push_url"
         led_schedule_business_sync
         return 0
     fi
+
+    majestic_lock_release
 
     feature_result_failure -1 "fail"
     log_error "stream start failed mode=$mode stream_url=$push_url"
@@ -436,16 +519,31 @@ feature_stream_stop() {
 
     log_info "stream stop request mode=$mode reason=$reason"
 
+    if [ "$(state_get_recording)" = "true" ]; then
+        feature_result_failure -1 "fail"
+        log_error "stream stop rejected mode=$mode reason=recording_active record_id=$(state_get_current_record_id)"
+        return 1
+    fi
+
+    if ! majestic_lock_acquire; then
+        feature_result_failure -1 "fail"
+        return 1
+    fi
+
     if feature_stream_disable_outgoing && feature_media_disable_all_video && feature_reload_stream_service; then
+        majestic_lock_release
         sleep 2
         state_set_publishing false
         state_clear_current_stream_url
         state_recompute_idle
+        feature_duration_cancel
         feature_result_success 0 "idle"
         log_info "stream stop success mode=$mode"
         led_schedule_business_sync
         return 0
     fi
+
+    majestic_lock_release
 
     feature_result_failure -1 "fail"
     log_error "stream stop failed mode=$mode"
@@ -462,13 +560,33 @@ feature_find_latest_record_file() {
         [ -f "$file_path" ] || continue
         file_ts=$(file_mtime_sec "$file_path")
         [ "$file_ts" -ge "$min_ts" ] || continue
-        if [ "$file_ts" -gt "$latest_ts" ]; then
+        if [ "$file_ts" -ge "$latest_ts" ]; then
             latest_ts="$file_ts"
             latest_file="$file_path"
         fi
     done
 
     printf '%s\n' "$latest_file"
+}
+
+feature_wait_for_new_record_file() {
+    min_ts="$1"
+    previous_file="$2"
+    previous_size="$3"
+    waited_sec=0
+    while [ "$waited_sec" -lt "$RECORD_START_VERIFY_TIMEOUT_SEC" ]; do
+        verified_file=$(feature_find_latest_record_file "$min_ts")
+        if [ -n "$verified_file" ] && [ -s "$verified_file" ]; then
+            verified_size=$(file_size_bytes "$verified_file")
+            if [ "$verified_file" != "$previous_file" ] || [ "${verified_size:-0}" -gt "${previous_size:-0}" ]; then
+                printf '%s\n' "$verified_file"
+                return 0
+            fi
+        fi
+        sleep "$RECORD_START_VERIFY_INTERVAL_SEC"
+        waited_sec=$((waited_sec + RECORD_START_VERIFY_INTERVAL_SEC))
+    done
+    return 1
 }
 
 feature_record_upload_pending_segments() {
@@ -557,14 +675,45 @@ feature_record_start() {
         return 1
     fi
 
+    if [ "$(state_get_recording)" = "true" ]; then
+        # 新 msgId 下的重复开始命令只回 code=1；绝不覆盖当前活动录像任务。
+        feature_result_success 1 "duplicate"
+        log_warn "record start rejected as duplicate requested_record_id=$requested_record_id active_record_id=$(state_get_current_record_id)"
+        return 0
+    fi
+
+    if [ "$(state_get_publishing)" != "true" ]; then
+        feature_result_failure -1 "fail"
+        log_error "record start failed record_id=$requested_record_id reason=stream_not_running"
+        return 1
+    fi
+
     log_info "record start request mode=$mode record_id=$requested_record_id"
 
+    record_start_ts=$(raw_now_sec)
+    previous_record_file=$(feature_find_latest_record_file 0)
+    previous_record_size=0
+    [ -n "$previous_record_file" ] && previous_record_size=$(file_size_bytes "$previous_record_file")
+    if ! majestic_lock_acquire; then
+        feature_result_failure -1 "fail"
+        return 1
+    fi
+
     if feature_media_apply_video_profile && feature_record_apply_profile && feature_record_enable && feature_reload_stream_service; then
+        if ! feature_wait_for_new_record_file "$record_start_ts" "$previous_record_file" "$previous_record_size" >/dev/null; then
+            log_error "record start verification failed record_id=$requested_record_id timeout=${RECORD_START_VERIFY_TIMEOUT_SEC}s"
+            feature_record_disable
+            feature_reload_stream_service
+            majestic_lock_release
+            feature_result_failure -1 "fail"
+            return 1
+        fi
+        majestic_lock_release
         state_set_recording true
         state_set_current_record_id "$requested_record_id"
         state_set_current_record_flow "$mode"
         [ -n "$task_id" ] && state_set_current_task_id "$task_id"
-        state_set_record_start_ts "$(raw_now_sec)"
+        state_set_record_start_ts "$record_start_ts"
         state_set_record_session_time "$(now_with_format "$RECORD_FILE_TIME_FORMAT")"
         state_reset_segment_no
         state_reset_segment_manifest
@@ -577,13 +726,15 @@ feature_record_start() {
         return 0
     fi
 
+    majestic_lock_release
+
     feature_result_failure -1 "fail"
     log_error "record start failed mode=$mode record_id=$requested_record_id"
     return 1
 }
 
 feature_record_stop() {
-    # 停止录像：先关闭录像/推流/video，再等待文件落稳，最后上传最终分片并清理状态。
+    # 停止录像只关闭 records；推流和 video 保持运行，统一由 stopStream/reset 关闭。
     mode="$1"
     requested_record_id="$2"
 
@@ -604,15 +755,47 @@ feature_record_stop() {
 
     log_info "record stop request mode=$mode record_id=$record_id"
 
-    if ! feature_record_disable || ! feature_stream_disable_outgoing || ! feature_media_disable_all_video || ! feature_reload_stream_service; then
+    if [ "$(state_get_recording)" != "true" ]; then
+        if [ "$record_id" = "$(state_get_last_record_id)" ]; then
+            RESULT_TASK_ID=$(state_get_last_record_task_id)
+            RESULT_FILE_NAME=$(state_get_last_record_file_name)
+            RESULT_FILE_URL=$(state_get_last_record_file_url)
+            RESULT_FILE_SIZE=$(state_get_last_record_file_size)
+            RESULT_SEGMENT_NO=$(state_get_last_record_segment_no)
+            if [ "$mode" = "task" ]; then
+                feature_result_success 0 "success"
+            else
+                feature_result_success 0 "streaming"
+            fi
+            log_warn "record stop duplicate reused cached result record_id=$record_id"
+            return 0
+        fi
+        feature_result_failure -1 "fail"
+        log_error "record stop rejected reason=no_active_record requested_record_id=$record_id"
+        return 1
+    fi
+
+    active_record_id=$(state_get_current_record_id)
+    if [ "$record_id" != "$active_record_id" ]; then
+        feature_result_failure -1 "fail"
+        log_error "record stop rejected reason=record_id_mismatch requested_record_id=$record_id active_record_id=$active_record_id"
+        return 1
+    fi
+
+    if ! majestic_lock_acquire; then
+        feature_result_failure -1 "fail"
+        return 1
+    fi
+
+    if ! feature_record_disable || ! feature_reload_stream_service; then
+        majestic_lock_release
         feature_result_failure -1 "fail"
         log_error "record stop failed before final upload record_id=$record_id"
         return 1
     fi
+    majestic_lock_release
 
     state_set_recording false
-    state_set_publishing false
-    state_clear_current_stream_url
     led_schedule_business_sync
     stop_pidfile_process "$SEGMENT_WORKER_PID_FILE"
     sleep "$RECORD_FINALIZE_WAIT_SEC"
@@ -620,11 +803,8 @@ feature_record_stop() {
     latest_file=$(feature_find_latest_record_file "$(state_get_record_start_ts)")
     if [ -z "$latest_file" ]; then
         feature_result_failure -1 "fail"
-        state_clear_current_record_id
-        state_clear_current_record_flow
-        if [ "$mode" != "task" ]; then
-            state_clear_current_task_id
-        fi
+        # 保留活动任务上下文，使后续 stop/reset 可以重试，避免 reset 误清理未收尾录像。
+        state_set_recording true
         state_recompute_idle
         log_error "record stop failed: no record file found record_id=$record_id"
         return 1
@@ -648,11 +828,19 @@ feature_record_stop() {
         if [ "$mode" = "task" ]; then
             feature_result_success 0 "success"
         else
-            feature_result_success 0 "idle"
+            feature_result_success 0 "streaming"
         fi
+        state_set_last_record_id "$record_id"
+        state_set_last_record_task_id "$(state_get_current_task_id)"
+        state_set_last_record_file_name "$remote_name"
+        state_set_last_record_file_url "$report_url"
+        state_set_last_record_file_size "$file_size"
+        state_set_last_record_segment_no "$next_segment_no"
         log_info "record stop success mode=$mode record_id=$record_id segment_no=$next_segment_no file_url=$report_url"
     else
         feature_result_failure -1 "fail"
+        state_set_recording true
+        state_recompute_idle
         log_error "record stop upload failed mode=$mode record_id=$record_id local_file=$latest_file"
         return 1
     fi
@@ -702,100 +890,80 @@ feature_capture_take() {
     return 1
 }
 
-feature_audio_play() {
-    # 当前版本按需求禁用音频播放，但仍返回成功 ACK，避免控制端流程被阻塞。
-    requested_file_name="$1"
-    requested_file_path="$2"
-
-    ensure_layout
-    state_init
-    ensure_runtime_files
-    feature_result_reset
-
-    RESULT_AUDIO_FILE_NAME="$requested_file_name"
-    [ -n "$RESULT_AUDIO_FILE_NAME" ] || RESULT_AUDIO_FILE_NAME=$(basename "$requested_file_path")
-    [ -n "$RESULT_AUDIO_FILE_NAME" ] || RESULT_AUDIO_FILE_NAME="audio_disabled.wav"
-
-    log_warn "audio playback disabled by current requirement file_name=$requested_file_name file_path=$requested_file_path"
-    feature_result_success 0 "success"
-    return 0
-}
-
-feature_task_prepare_voice() {
-    # 旧版实验准备语音命令暂不做实际动作，仅保留协议兼容。
-    task_id="$1"
-    log_warn "task prepare voice skipped because legacy voice feature is disabled task_id=$task_id"
-    return 0
-}
-
 feature_task_prepare_desk_voice() {
-    # 桌牌识别准备语音交给独立 worker 播放，避免阻塞 MQTT listener。
+    # 先同步完成受 Majestic 锁保护的音频初始化，再异步播放，保持 MQTT 命令顺序。
     task_id="$1"
     log_info "task prepare desk recognition voice request task_id=$task_id"
+
+    if [ "$(state_get_recording)" = "true" ]; then
+        # 录像中只允许复用启动阶段已经就绪的音频接口，禁止修改 YAML 或 HUP Majestic。
+        if ! sh "$APP_HOME/voice.sh" ready; then
+            log_error "task prepare desk recognition voice rejected during active record because audio output is not ready task_id=$task_id record_id=$(state_get_current_record_id)"
+            return 1
+        fi
+    else
+        if ! sh "$APP_HOME/voice.sh" init; then
+            log_error "task prepare desk recognition voice init failed task_id=$task_id"
+            return 1
+        fi
+    fi
+
     sh "$APP_HOME/voice.sh" desk "$task_id" &
     return 0
 }
 
-feature_task_hand_voice_start() {
-    # 手势识别语音开始命令暂不做实际动作。
-    task_id="$1"
-    record_id="$2"
-    log_warn "task hand voice start skipped because voice feature is disabled task_id=$task_id record_id=$record_id"
-    return 0
-}
-
-feature_task_hand_voice_stop() {
-    # 手势识别语音停止命令需要回 ACK，因此写入 RESULT_* 后返回成功。
-    task_id="$1"
-    record_id="$2"
-
-    ensure_layout
-    state_init
-    ensure_runtime_files
-    feature_result_reset
-
-    RESULT_TASK_ID="${task_id:-$(state_get_current_task_id)}"
-    RESULT_RECORD_ID="${record_id:-$(state_get_current_record_id)}"
-    log_warn "task hand voice stop ack as success because voice feature is disabled task_id=$task_id record_id=$record_id"
-    feature_result_success 0 "success"
-    return 0
-}
-
 feature_reset_execute() {
-    # 重置命令用于兜底恢复：停止分片 worker、关闭录像/推流/video，并清空所有运行态。
-    task_id="$1"
+    # reset 先安全停止并上传活动录像；成功后才关闭推流/video 并清理活动状态。
+    reset_task_id="$1"
 
     ensure_layout
     state_init
     ensure_runtime_files
     feature_result_reset
 
-    RESULT_TASK_ID="${task_id:-$(state_get_current_task_id)}"
+    RESULT_TASK_ID="${reset_task_id:-$(state_get_current_task_id)}"
     reset_code=0
+    feature_duration_cancel
 
-    stop_pidfile_process "$SEGMENT_WORKER_PID_FILE"
+    if [ "$(state_get_recording)" = "true" ]; then
+        reset_record_id=$(state_get_current_record_id)
+        reset_record_mode=$(state_get_current_record_flow)
+        [ -n "$reset_record_mode" ] || reset_record_mode=task
+        if ! feature_record_stop "$reset_record_mode" "$reset_record_id"; then
+            feature_result_reset
+            RESULT_TASK_ID="${reset_task_id:-$(state_get_current_task_id)}"
+            feature_result_failure -1 "fail"
+            log_error "reset stopped because active record was not safely finalized task_id=$reset_task_id record_id=$reset_record_id"
+            return 1
+        fi
+    fi
+
     stop_pidfile_process "$VOICE_PLAYER_PID_FILE"
 
-    feature_record_disable || reset_code=-1
-    feature_stream_disable_outgoing || reset_code=-1
-    feature_media_disable_all_video || reset_code=-1
-    feature_reload_stream_service || reset_code=-1
-
-    state_set_recording false
-    state_set_publishing false
-    state_set_record_start_ts 0
-    state_clear_record_session_time
-    state_reset_segment_no
-    state_reset_segment_manifest
-    state_clear_current_record_id
-    state_clear_current_record_flow
-    state_clear_current_stream_url
-    state_clear_current_task_id
-    state_recompute_idle
+    if majestic_lock_acquire; then
+        feature_record_disable || reset_code=-1
+        feature_stream_disable_outgoing || reset_code=-1
+        feature_media_disable_all_video || reset_code=-1
+        feature_reload_stream_service || reset_code=-1
+        majestic_lock_release
+    else
+        reset_code=-1
+    fi
 
     if [ "$reset_code" = "0" ]; then
+        state_set_recording false
+        state_set_publishing false
+        state_set_record_start_ts 0
+        state_clear_record_session_time
+        state_reset_segment_no
+        state_reset_segment_manifest
+        state_clear_current_record_id
+        state_clear_current_record_flow
+        state_clear_current_stream_url
+        state_clear_current_task_id
+        state_recompute_idle
         feature_result_success 0 "success"
-        log_info "reset success task_id=$task_id"
+        log_info "reset success task_id=$reset_task_id"
         sleep "$LED_STATUS_DELAY_SEC"
         led_runtime_reset_idle
         return 0
@@ -803,8 +971,7 @@ feature_reset_execute() {
 
     RESULT_CODE="$reset_code"
     feature_result_failure -1 "fail"
-    log_error "reset partial failure task_id=$task_id"
-    sleep "$LED_STATUS_DELAY_SEC"
-    led_runtime_reset_idle
+    log_error "reset partial failure task_id=$reset_task_id"
+    led_schedule_business_sync
     return 1
 }

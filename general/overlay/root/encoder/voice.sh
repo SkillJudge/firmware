@@ -62,6 +62,26 @@ voice_set_output_enabled() {
     return 1
 }
 
+voice_initialize_output() {
+    # 快路径不触碰 Majestic；首次初始化才在全局锁内修改 YAML 并完成 HUP/就绪检查。
+    require_command yaml-cli || return 1
+    require_command curl || return 1
+    if voice_output_is_ready; then
+        return 0
+    fi
+
+    majestic_lock_acquire || return 1
+    if voice_output_is_ready; then
+        majestic_lock_release
+        return 0
+    fi
+
+    voice_set_output_enabled true
+    init_rc=$?
+    majestic_lock_release
+    return "$init_rc"
+}
+
 voice_output_is_ready() {
     ready_http_code=$(curl -sS \
         --connect-timeout "$VOICE_CONNECT_TIMEOUT_SEC" \
@@ -70,6 +90,12 @@ voice_output_is_ready() {
         -w '%{http_code}' \
         "$VOICE_PLAY_URL" 2>/dev/null) || return 1
     [ "$ready_http_code" = "200" ]
+}
+
+voice_check_output_ready() {
+    # 只读探测，不修改 majestic.yaml，也不发送 HUP；供录像期间安全判断使用。
+    require_command curl || return 1
+    voice_output_is_ready
 }
 
 voice_pid_is_running() {
@@ -286,7 +312,6 @@ voice_play_desk() {
         return 1
     fi
 
-    require_command yaml-cli || return 1
     require_command curl || return 1
 
     if [ ! -f "$VOICE_DESK_PCM_FILE" ]; then
@@ -312,7 +337,10 @@ voice_play_desk() {
     trap 'voice_handle_signal 143' TERM
 
     encoder_exit_if_main_stopped "voice"
-    voice_set_output_enabled true || return 1
+    if ! voice_output_is_ready; then
+        log_error_tag "VOICE" "audio output is not initialized; reject playback task_id=$task_id"
+        return 1
+    fi
     log_info_tag "VOICE" "desk voice start task_id=$task_id repeat=$VOICE_REPEAT_COUNT file=$VOICE_DESK_PCM_FILE"
 
     current=1
@@ -337,12 +365,18 @@ voice_play_desk() {
 }
 
 case "${1:-}" in
+    init)
+        voice_initialize_output
+        ;;
+    ready)
+        voice_check_output_ready
+        ;;
     desk)
         shift
         voice_play_desk "$@"
         ;;
     *)
-        echo "usage: sh voice.sh desk [task_id]" >&2
+        echo "usage: sh voice.sh {init|ready|desk [task_id]}" >&2
         exit 1
         ;;
 esac

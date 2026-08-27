@@ -46,6 +46,12 @@ state_init() {
     [ -f "$STATE_RECORD_SESSION_TIME_FILE" ] || : > "$STATE_RECORD_SESSION_TIME_FILE"
     [ -f "$STATE_SEGMENT_NO_FILE" ] || echo 0 > "$STATE_SEGMENT_NO_FILE"
     [ -f "$STATE_SEGMENT_MANIFEST_FILE" ] || : > "$STATE_SEGMENT_MANIFEST_FILE"
+    [ -f "$STATE_LAST_RECORD_ID_FILE" ] || : > "$STATE_LAST_RECORD_ID_FILE"
+    [ -f "$STATE_LAST_RECORD_TASK_ID_FILE" ] || : > "$STATE_LAST_RECORD_TASK_ID_FILE"
+    [ -f "$STATE_LAST_RECORD_FILE_NAME_FILE" ] || : > "$STATE_LAST_RECORD_FILE_NAME_FILE"
+    [ -f "$STATE_LAST_RECORD_FILE_URL_FILE" ] || : > "$STATE_LAST_RECORD_FILE_URL_FILE"
+    [ -f "$STATE_LAST_RECORD_FILE_SIZE_FILE" ] || echo 0 > "$STATE_LAST_RECORD_FILE_SIZE_FILE"
+    [ -f "$STATE_LAST_RECORD_SEGMENT_NO_FILE" ] || echo 0 > "$STATE_LAST_RECORD_SEGMENT_NO_FILE"
 }
 
 # 以下 getter/setter 是 shell 版本的状态访问接口，避免业务层直接操作具体文件名。
@@ -83,6 +89,18 @@ state_clear_record_session_time() { state_clear "$STATE_RECORD_SESSION_TIME_FILE
 state_get_segment_no() { state_read "$STATE_SEGMENT_NO_FILE" 0; }
 state_set_segment_no() { state_write "$STATE_SEGMENT_NO_FILE" "$1"; }
 state_reset_segment_no() { state_write "$STATE_SEGMENT_NO_FILE" 0; }
+state_get_last_record_id() { state_read "$STATE_LAST_RECORD_ID_FILE" ""; }
+state_set_last_record_id() { state_write "$STATE_LAST_RECORD_ID_FILE" "$1"; }
+state_get_last_record_task_id() { state_read "$STATE_LAST_RECORD_TASK_ID_FILE" ""; }
+state_set_last_record_task_id() { state_write "$STATE_LAST_RECORD_TASK_ID_FILE" "$1"; }
+state_get_last_record_file_name() { state_read "$STATE_LAST_RECORD_FILE_NAME_FILE" ""; }
+state_set_last_record_file_name() { state_write "$STATE_LAST_RECORD_FILE_NAME_FILE" "$1"; }
+state_get_last_record_file_url() { state_read "$STATE_LAST_RECORD_FILE_URL_FILE" ""; }
+state_set_last_record_file_url() { state_write "$STATE_LAST_RECORD_FILE_URL_FILE" "$1"; }
+state_get_last_record_file_size() { state_read "$STATE_LAST_RECORD_FILE_SIZE_FILE" 0; }
+state_set_last_record_file_size() { state_write "$STATE_LAST_RECORD_FILE_SIZE_FILE" "$1"; }
+state_get_last_record_segment_no() { state_read "$STATE_LAST_RECORD_SEGMENT_NO_FILE" 0; }
+state_set_last_record_segment_no() { state_write "$STATE_LAST_RECORD_SEGMENT_NO_FILE" "$1"; }
 
 state_reset_segment_manifest() {
     # 分片清单记录已经上传过的本地 mp4，重置后新的录像会重新开始跟踪。

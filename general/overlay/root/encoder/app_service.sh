@@ -184,6 +184,43 @@ service_heartbeat_forever() {
     done
 }
 
+service_command_cache_key() {
+    printf '%s_%s_%s_%s_%s' "$PROTO_SENDER" "$PROTO_SENDER_SUB" "$PROTO_FLOW" "$PROTO_ACTION" "$PROTO_MSG_ID" | sed 's/[^A-Za-z0-9._-]/_/g'
+}
+
+service_command_cache_replay() {
+    cache_key="$1"
+    cache_done="${COMMAND_CACHE_DIR}/${cache_key}.done"
+    [ -f "$cache_done" ] || return 1
+
+    cache_topic=$(cat "${COMMAND_CACHE_DIR}/${cache_key}.topic" 2>/dev/null)
+    cache_payload=$(cat "${COMMAND_CACHE_DIR}/${cache_key}.payload" 2>/dev/null)
+    log_warn_tag "DISPATCH" "duplicate command replayed msg_id=$PROTO_MSG_ID command=$PROTO_COMMAND"
+    if [ -n "$cache_topic" ] && [ -n "$cache_payload" ]; then
+        protocol_publish_payload "$cache_topic" "$cache_payload"
+    fi
+    return 0
+}
+
+service_command_cache_store() {
+    cache_key="$1"
+    cache_base="${COMMAND_CACHE_DIR}/${cache_key}"
+    printf '%s\n' "$PROTO_RESULT_TOPIC" > "${cache_base}.topic.tmp.$$"
+    printf '%s\n' "$PROTO_RESULT_PAYLOAD" > "${cache_base}.payload.tmp.$$"
+    mv "${cache_base}.topic.tmp.$$" "${cache_base}.topic"
+    mv "${cache_base}.payload.tmp.$$" "${cache_base}.payload"
+    printf '%s\n' "$(raw_now_sec)" > "${cache_base}.done"
+
+    cache_count=$(find "$COMMAND_CACHE_DIR" -type f -name '*.done' 2>/dev/null | wc -l | tr -d '[:space:]')
+    while [ "${cache_count:-0}" -gt "$COMMAND_CACHE_MAX_ENTRIES" ]; do
+        oldest_done=$(ls -1t "$COMMAND_CACHE_DIR"/*.done 2>/dev/null | tail -n 1)
+        [ -n "$oldest_done" ] || break
+        oldest_base=${oldest_done%.done}
+        rm -f "$oldest_base.done" "$oldest_base.topic" "$oldest_base.payload"
+        cache_count=$((cache_count - 1))
+    done
+}
+
 service_dispatch() {
     # 单条 MQTT 命令的解析和分发入口。真正的业务动作在 feature_engine.sh 内完成。
     topic="$1"
@@ -211,6 +248,14 @@ service_dispatch() {
             ;;
     esac
 
+    command_cache_key=$(service_command_cache_key)
+    if service_command_cache_replay "$command_cache_key"; then
+        exit 0
+    fi
+
+    business_action_lock_acquire || exit 1
+    trap 'business_action_lock_release' EXIT INT TERM
+
     case "$PROTO_COMMAND" in
         # 普通录像、推流、抓拍命令。
         record_start)
@@ -233,14 +278,6 @@ service_dispatch() {
             feature_stream_stop stream "$PROTO_REASON"
             rc=$?
             ;;
-        audio_play)
-            feature_audio_play "$PROTO_FILE_NAME" "$PROTO_FILE_PATH"
-            rc=$?
-            ;;
-        task_prepare_voice)
-            feature_task_prepare_voice "$PROTO_TASK_ID"
-            rc=$?
-            ;;
         task_prepare_desk_voice)
             feature_task_prepare_desk_voice "$PROTO_TASK_ID"
             rc=$?
@@ -252,14 +289,6 @@ service_dispatch() {
             ;;
         task_record_start)
             feature_record_start task "$PROTO_RECORD_ID" "$PROTO_TASK_ID"
-            rc=$?
-            ;;
-        task_hand_voice_start)
-            feature_task_hand_voice_start "$PROTO_TASK_ID" "$PROTO_RECORD_ID"
-            rc=$?
-            ;;
-        task_hand_voice_stop)
-            feature_task_hand_voice_stop "$PROTO_TASK_ID" "$PROTO_RECORD_ID"
             rc=$?
             ;;
         task_record_stop)
@@ -276,7 +305,14 @@ service_dispatch() {
             ;;
     esac
 
-    protocol_publish_command_result || rc=1
+    if protocol_build_command_result; then
+        service_command_cache_store "$command_cache_key"
+        if [ -n "$PROTO_RESULT_TOPIC" ]; then
+            protocol_publish_payload "$PROTO_RESULT_TOPIC" "$PROTO_RESULT_PAYLOAD" || rc=1
+        fi
+    else
+        rc=1
+    fi
     exit "$rc"
 }
 
@@ -352,6 +388,10 @@ service_segment_worker() {
     feature_record_segment_loop "$1" "$2" "$3"
 }
 
+service_duration_worker() {
+    feature_duration_loop "$1" "$2" "$3"
+}
+
 # 命令行分派表。主程序和子进程都通过 `sh app_service.sh <role>` 调用这里。
 case "$1" in
     register)
@@ -384,8 +424,13 @@ case "$1" in
         shift
         service_segment_worker "$@"
         ;;
+    duration_worker)
+        ensure_device_id_configured || exit 1
+        shift
+        service_duration_worker "$@"
+        ;;
     *)
-        echo "usage: sh app_service.sh {register|heartbeat|heartbeat_once|listener|dispatch|segment_worker}"
+        echo "usage: sh app_service.sh {register|heartbeat|heartbeat_once|listener|dispatch|segment_worker|duration_worker}"
         exit 1
         ;;
 esac

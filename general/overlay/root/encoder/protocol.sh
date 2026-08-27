@@ -215,13 +215,6 @@ protocol_parse_command() {
             PROTO_COMMAND="stream_stop"
             PROTO_REPLY_REQUIRED="true"
             ;;
-        play-audio/play_audio/playAudio)
-            PROTO_COMMAND="audio_play"
-            PROTO_REPLY_REQUIRED="true"
-            ;;
-        task/prepare_experiment_voice/prepareExperimentVoice)
-            PROTO_COMMAND="task_prepare_voice"
-            ;;
         task/prepare_desk_recognition_voice/prepareDeskRecognitionVoice)
             PROTO_COMMAND="task_prepare_desk_voice"
             ;;
@@ -232,13 +225,6 @@ protocol_parse_command() {
             ;;
         task/start_record/startRecord)
             PROTO_COMMAND="task_record_start"
-            PROTO_REPLY_REQUIRED="true"
-            ;;
-        task/start_hand_recognition_voice/startHandRecognitionVoice)
-            PROTO_COMMAND="task_hand_voice_start"
-            ;;
-        task/stop_hand_recognition_voice/stopHandRecognitionVoice)
-            PROTO_COMMAND="task_hand_voice_stop"
             PROTO_REPLY_REQUIRED="true"
             ;;
         task/stop_record/stopRecord)
@@ -313,8 +299,10 @@ protocol_publish_segment_uploaded() {
     protocol_publish_payload "$topic" "$payload"
 }
 
-protocol_publish_command_result() {
-    # 根据 PROTO_COMMAND 选择对应 ACK topic 和 payload 结构。
+protocol_build_command_result() {
+    # 根据 PROTO_COMMAND 生成 ACK，调用方先持久化再发布，以缩小重复执行窗口。
+    PROTO_RESULT_TOPIC=""
+    PROTO_RESULT_PAYLOAD=""
     [ "$PROTO_REPLY_REQUIRED" = "true" ] || return 0
 
     case "$PROTO_COMMAND" in
@@ -365,15 +353,6 @@ protocol_publish_command_result() {
                 '{replyTo:$replyTo,status:$status}')
             payload=$(protocol_build_payload "$PROTO_MSG_ID" "stopStreamAck" "$data_json")
             ;;
-        audio_play)
-            topic=$(protocol_build_topic "encoder" "$DEVICE_ID" "$PROTO_SENDER" "$PROTO_SENDER_SUB" "play-audio" "play_audio_ack")
-            data_json=$(jq -nc \
-                --argjson replyTo "$PROTO_MSG_ID" \
-                --arg fileName "$RESULT_AUDIO_FILE_NAME" \
-                --arg status "$RESULT_STATUS" \
-                '{replyTo:$replyTo,fileName:$fileName,status:$status}')
-            payload=$(protocol_build_payload "$PROTO_MSG_ID" "playAudioAck" "$data_json")
-            ;;
         task_stream_start)
             topic=$(protocol_build_topic "encoder" "$DEVICE_ID" "$PROTO_SENDER" "$PROTO_SENDER_SUB" "task" "start_stream_ack")
             data_json=$(jq -nc \
@@ -403,15 +382,6 @@ protocol_publish_command_result() {
                 '{recordId:$recordId,fileSize:$fileSize,fileUrl:$fileUrl,segmentNo:$segmentNo}')
             payload=$(protocol_build_payload "$PROTO_MSG_ID" "lastSegmentUploaded" "$data_json")
             ;;
-        task_hand_voice_stop)
-            topic=$(protocol_build_topic "encoder" "$DEVICE_ID" "$PROTO_SENDER" "$PROTO_SENDER_SUB" "task" "stop_hand_recognition_voice_ack")
-            data_json=$(jq -nc \
-                --argjson replyTo "$PROTO_MSG_ID" \
-                --arg recordId "$RESULT_RECORD_ID" \
-                --argjson code "$RESULT_CODE" \
-                '{replyTo:$replyTo,recordId:$recordId,code:$code}')
-            payload=$(protocol_build_payload "$PROTO_MSG_ID" "stopHandRecognitionVoiceAck" "$data_json")
-            ;;
         task_reset)
             topic=$(protocol_build_topic "encoder" "$DEVICE_ID" "$PROTO_SENDER" "$PROTO_SENDER_SUB" "task" "reset_encoder_ack")
             data_json=$(jq -nc \
@@ -427,5 +397,12 @@ protocol_publish_command_result() {
             ;;
     esac
 
-    protocol_publish_payload "$topic" "$payload"
+    PROTO_RESULT_TOPIC="$topic"
+    PROTO_RESULT_PAYLOAD="$payload"
+}
+
+protocol_publish_command_result() {
+    protocol_build_command_result || return 1
+    [ -n "$PROTO_RESULT_TOPIC" ] || return 0
+    protocol_publish_payload "$PROTO_RESULT_TOPIC" "$PROTO_RESULT_PAYLOAD"
 }

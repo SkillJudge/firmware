@@ -54,6 +54,7 @@ cleanup_main() {
     stop_pidfile_process "$LISTENER_PID_FILE"
     stop_pidfile_process "$HEARTBEAT_PID_FILE"
     stop_pidfile_process "$SEGMENT_WORKER_PID_FILE"
+    stop_pidfile_process "$DURATION_WORKER_PID_FILE"
     stop_pidfile_process "$VOICE_PLAYER_PID_FILE"
     release_pidfile_if_owner "$MAIN_PID_FILE"
     led_runtime_stop
@@ -82,6 +83,7 @@ trap 'exit 0' INT TERM
 trap 'cleanup_main' EXIT
 
 feature_restore_startup_media || log_warn_tag "LIFECYCLE" "startup Majestic restore failed, continue controller startup"
+sh "$APP_HOME/voice.sh" init || log_warn_tag "VOICE" "startup audio output init failed; desk voice will retry before playback"
 
 # While the controller is running, a steady green LED means idle and ready for commands.
 led_runtime_start
@@ -106,7 +108,12 @@ while true; do
     # 两个常驻子服务都有 pidfile，主进程只做轻量守护和自动重启。
     if ! stream_service_is_running; then
         log_warn_tag "LIFECYCLE" "Majestic service lost, restarting"
-        stream_service_start_if_missing || log_error_tag "LIFECYCLE" "Majestic service restart failed"
+        if majestic_lock_acquire; then
+            stream_service_start_if_missing || log_error_tag "LIFECYCLE" "Majestic service restart failed"
+            majestic_lock_release
+        else
+            log_error_tag "LIFECYCLE" "Majestic service restart skipped because config lock failed"
+        fi
     fi
 
     if ! is_pid_running_file "$HEARTBEAT_PID_FILE" "app_service.sh heartbeat"; then

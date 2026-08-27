@@ -22,6 +22,8 @@ SCRIPT_DIR=$(CDPATH= cd "$(dirname "$0")" && pwd)
 : "${BATTERY_LOW_SHUTDOWN_THRESHOLD_MV:=3200}"
 : "${BATTERY_LOW_SHUTDOWN_DELAY_SEC:=2}"
 : "${BATTERY_LOW_SHUTDOWN_COMMAND:=poweroff}"
+: "${BATTERY_LOW_SHUTDOWN_OWNER_FILE:=/tmp/alarm_monitor_power_shutdown.owner}"
+: "${BATTERY_LOW_SHUTDOWN_OWNER_MAX_AGE_SEC:=5}"
 
 battery_swap_word() {
     raw="$1"
@@ -274,6 +276,19 @@ battery_check_low_voltage_shutdown() {
     if ! battery_is_uint "$threshold_mv"; then
         log_warn_tag "BATTERY" "invalid low shutdown threshold: $threshold_mv"
         return 0
+    fi
+
+    # 报警监测进程存活时，由它负责“先报警、等待 ACK、再关机”。若监测
+    # 进程退出，owner PID 会失效，本脚本立即恢复原有的 3.2V 安全关机兜底。
+    owner_pid=$(cat "$BATTERY_LOW_SHUTDOWN_OWNER_FILE" 2>/dev/null)
+    owner_mtime=$(stat -c %Y "$BATTERY_LOW_SHUTDOWN_OWNER_FILE" 2>/dev/null)
+    now_sec=$(date '+%s')
+    if battery_is_uint "$owner_pid" && battery_is_uint "$owner_mtime" && battery_is_uint "$now_sec" && \
+        [ $((now_sec - owner_mtime)) -le "$BATTERY_LOW_SHUTDOWN_OWNER_MAX_AGE_SEC" ] && kill -0 "$owner_pid" 2>/dev/null; then
+        if [ -r "/proc/$owner_pid/cmdline" ] && tr '\000' ' ' < "/proc/$owner_pid/cmdline" | grep -F 'alarm_monitor.sh' >/dev/null 2>&1; then
+            log_debug_tag "BATTERY" "low voltage shutdown delegated to alarm monitor pid=$owner_pid"
+            return 0
+        fi
     fi
 
     if [ "$voltage_mv" -lt "$threshold_mv" ]; then
