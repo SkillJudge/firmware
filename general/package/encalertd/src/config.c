@@ -9,6 +9,13 @@
 
 #include "common.h"
 
+/* 布尔值解析：conf 文档与 bash 开关沿用 "true"，同时兼容 1/on/yes */
+static bool cfg_bool(const char *v)
+{
+	return !strcmp(v, "1") || !strcmp(v, "true") ||
+	       !strcmp(v, "on") || !strcmp(v, "yes");
+}
+
 /* conf 键值对：读一行 key=value，忽略 # 注释与空行 */
 static void cfg_set(enc_cfg_t *c, const char *k, const char *v)
 {
@@ -20,12 +27,12 @@ static void cfg_set(enc_cfg_t *c, const char *k, const char *v)
 	else if (!strcmp(k, "state_dir"))   snprintf(c->state_dir, sizeof(c->state_dir), "%s", v);
 	else if (!strcmp(k, "actions_dir")) snprintf(c->actions_dir, sizeof(c->actions_dir), "%s", v);
 	else if (!strcmp(k, "action_timeout_sec")) c->action_timeout_sec = atoi(v);
-	else if (!strcmp(k, "enable_wifi"))        c->enable_wifi = atoi(v) != 0;
-	else if (!strcmp(k, "enable_battery"))     c->enable_battery = atoi(v) != 0;
-	else if (!strcmp(k, "enable_sdcard"))      c->enable_sdcard = atoi(v) != 0;
-	else if (!strcmp(k, "enable_sysres"))      c->enable_sysres = atoi(v) != 0;
-	else if (!strcmp(k, "enable_process"))     c->enable_process = atoi(v) != 0;
-	else if (!strcmp(k, "enable_stream"))      c->enable_stream = atoi(v) != 0;
+	else if (!strcmp(k, "enable_wifi"))        c->enable_wifi = cfg_bool(v);
+	else if (!strcmp(k, "enable_battery"))     c->enable_battery = cfg_bool(v);
+	else if (!strcmp(k, "enable_sdcard"))      c->enable_sdcard = cfg_bool(v);
+	else if (!strcmp(k, "enable_sysres"))      c->enable_sysres = cfg_bool(v);
+	else if (!strcmp(k, "enable_process"))     c->enable_process = cfg_bool(v);
+	else if (!strcmp(k, "enable_stream"))      c->enable_stream = cfg_bool(v);
 	else if (!strcmp(k, "mqtt_host"))   snprintf(c->mqtt_host, sizeof(c->mqtt_host), "%s", v);
 	else if (!strcmp(k, "mqtt_port"))          c->mqtt_port = atoi(v);
 	else if (!strcmp(k, "mqtt_user"))   snprintf(c->mqtt_user, sizeof(c->mqtt_user), "%s", v);
@@ -43,6 +50,10 @@ static void cfg_set(enc_cfg_t *c, const char *k, const char *v)
 	else if (!strcmp(k, "charge_drop_pct"))    c->charge_drop_pct = atoi(v);
 	else if (!strcmp(k, "charge_drop_mv"))     c->charge_drop_mv = atoi(v);
 	else if (!strcmp(k, "record_min_free_mb")) c->record_min_free_mb = atol(v);
+	else if (!strcmp(k, "monitor_procs")) snprintf(c->monitor_procs, sizeof(c->monitor_procs), "%s", v);
+	else if (!strcmp(k, "storm_window_sec"))   c->storm_window_sec = atoi(v);
+	else if (!strcmp(k, "storm_max_restarts")) c->storm_max_restarts = atoi(v);
+	else if (!strcmp(k, "crash_dir"))   snprintf(c->crash_dir, sizeof(c->crash_dir), "%s", v);
 	else if (!strcmp(k, "wifi_iface")) snprintf(c->wifi_iface, sizeof(c->wifi_iface), "%s", v);
 }
 
@@ -77,6 +88,22 @@ static void cfg_defaults(enc_cfg_t *c)
 	c->charge_drop_pct    = 2;
 	c->charge_drop_mv     = 30;
 	c->record_min_free_mb = 5120;      /* 5GB：足够一轮应急录像的底线 */
+
+	/* 进程监控：majestic 固定 pid 文件路径；encoder_main/listener/heartbeat
+	 * 是 shell 脚本进程（comm 为解释器名 "sh"，comm 匹配失效），探测链 =
+	 * state pid 文件 → comm 兜底 → cmdline 子串匹配（cmdpat 字段）；
+	 * ipc_server(=factoryinit 服务) 无 pid 文件，走 /proc comm 扫描 */
+	snprintf(c->monitor_procs, sizeof(c->monitor_procs),
+		 "majestic:/var/run/majestic.pid,"
+		 "encoder_main::encoder_main.sh,"
+		 "listener::app_service.sh listener,"
+		 "heartbeat::app_service.sh heartbeat,"
+		 "ipc_server");
+	c->storm_window_sec   = 900;       /* 15min 窗口 */
+	c->storm_max_restarts = 3;         /* 窗口内拉起 ≥3 次升级 reboot */
+	snprintf(c->crash_dir, sizeof(c->crash_dir),
+		 "/mnt/mmcblk0p1/logs/crash");
+
 	snprintf(c->wifi_iface, sizeof(c->wifi_iface), "wlan0");
 }
 

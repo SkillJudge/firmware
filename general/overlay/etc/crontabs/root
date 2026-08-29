@@ -8,3 +8,8 @@
 # |    |      |     |     |
 # *    *      *     *     *     command to be executed
 #
+
+# encalertd 自身看门狗兜底（6001 watchdog_missing 消费方在 encalertd 内）：
+# 每分钟检查 encalertd 存活；死亡时注入事件文件并拉起，
+# encalertd 启动后消费事件 → 6001 报警（断网时落 spool 补发）
+* * * * * pidof encalertd >/dev/null 2>&1 || { echo "watchdog_missing|\$(date +%s)" > /tmp/encalertd_event; /usr/bin/encalertd -c /etc/encalertd.conf -b; }

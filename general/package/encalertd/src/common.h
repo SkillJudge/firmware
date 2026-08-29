@@ -69,6 +69,12 @@ typedef struct {
     /* 磁盘空间保留（record_purge 空间模式 + 4003 判定） */
     long        record_min_free_mb;   /* 录像盘最低空闲 MB，默认 5120(=5GB) */
 
+    /* 进程监控（proc_down 6103 + 风暴升级 6104） */
+    char        monitor_procs[256];   /* 清单 name[:pidfile[:cmdpat]]，逗号分隔 */
+    int         storm_window_sec;     /* 重启风暴统计窗口，默认 900s */
+    int         storm_max_restarts;   /* 窗口内拉起次数上限，默认 3 */
+    char        crash_dir[256];       /* 崩溃快照持久目录（SD 卡） */
+
     /* WiFi 原生检测（wifi.c） */
     char        wifi_iface[16];    /* 默认 wlan0 */
 } enc_cfg_t;

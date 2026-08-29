@@ -13,11 +13,13 @@
  *       （例外：wifi 恢复为 C 内置系统调用，见 wifi.c）。
  */
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <sys/statvfs.h>
 #include <sys/sysinfo.h>
 #include <time.h>
@@ -29,6 +31,9 @@
 #define CRON_EVENT_FILE         "/tmp/encalertd_event"
 #define RECORD_PURGE_MIN_INT    18000    /* 与原 bash 版一致：两次清理最短间隔 */
 #define DEFAULT_SRS_PORT        1935
+
+#define ALERT_PROC_STORM        6104     /* 重启风暴升级 (fatal) */
+#define REBOOT_MIN_UPTIME_SEC   600      /* 开机 10min 内不执行风暴 reboot */
 
 /* wifi.c 提供 */
 extern const char *det_wifi_watch(const enc_cfg_t *c,
@@ -383,58 +388,299 @@ static const char *det_mem_pressure(const enc_cfg_t *c,
 	return reason;
 }
 
-/* ==================== 5. 服务进程死亡 (6103) ==================== */
+/* ==================== 5. 服务进程死亡 (6103 + 风暴 6104) ====================
+ * 监控清单 conf monitor_procs，项格式 name[:pidfile[:cmdpat]]：
+ *   - pidfile：显式 pid 文件路径（如 majestic:/var/run/majestic.pid）；
+ *     省略时依次尝试 <state_dir>/<name>.pid
+ *   - cmdpat：/proc/<pid>/cmdline 子串匹配模式，用于 shell 脚本进程
+ *     兜底（encoder_main.sh 家族 comm 为解释器名 "sh"，comm 精确匹配
+ *     永远失效），如 listener::app_service.sh listener
+ * 探测链（任一命中即存活）：
+ *   1) pid 文件读 pid + kill(pid,0)；显式 pidfile 命中时做身份复核
+ *      （/proc/<pid>/comm 或 cmdline 匹配 name/cmdpat，防 pid 回收复用）
+ *   2) comm 精确匹配 name（C 二进制进程：majestic/ipc_server）
+ *   3) cmdline 子串匹配 cmdpat（仅 cmdpat 非空时）
+ * 确认死亡 → 6103 error → on_confirmed：快照 → 拉起(仅根进程) → 风暴升级
+ */
+
+/* /proc/<pid>/comm 精确匹配（跳过 init 与自身） */
+static bool comm_alive(const char *name)
+{
+	DIR *d = opendir("/proc");
+	struct dirent *e;
+	bool alive = false;
+	size_t nl = strlen(name);
+
+	if (!d || nl == 0)
+		return false;
+	while ((e = readdir(d))) {
+		char path[48], comm[64];
+
+		if (e->d_name[0] < '0' || e->d_name[0] > '9')
+			continue;
+		if (atoi(e->d_name) <= 1 || atoi(e->d_name) == getpid())
+			continue;
+		snprintf(path, sizeof(path), "/proc/%s/comm", e->d_name);
+		if (!read_str_file(path, comm, sizeof(comm)))
+			continue;
+		if (strlen(comm) == nl && !strncmp(comm, name, nl)) {
+			alive = true;
+			break;
+		}
+	}
+	closedir(d);
+	return alive;
+}
+
+/* 读取 /proc/<pid>/cmdline 并把 NUL 分隔的 argv 拼成空格串 */
+static bool proc_cmdline(long pid, char *buf, size_t sz)
+{
+	char path[48];
+	FILE *f;
+	size_t n;
+
+	snprintf(path, sizeof(path), "/proc/%ld/cmdline", pid);
+	f = fopen(path, "rb");
+	if (!f)
+		return false;
+	n = fread(buf, 1, sz - 1, f);
+	fclose(f);
+	buf[n] = '\0';
+	for (size_t i = 0; i + 1 < n; i++)
+		if (buf[i] == '\0')
+			buf[i] = ' ';
+	return n > 0;
+}
+
+/* /proc/<pid>/cmdline 全表子串匹配 cmdpat（跳过 init 与自身）。
+ * shell 脚本进程 comm 为解释器名("sh")，只能靠 cmdline 识别。 */
+static bool cmdline_alive(const char *pat)
+{
+	DIR *d = opendir("/proc");
+	struct dirent *e;
+	bool alive = false;
+
+	if (!d || !pat[0])
+		return false;
+	while ((e = readdir(d))) {
+		char buf[512];
+
+		if (e->d_name[0] < '0' || e->d_name[0] > '9')
+			continue;
+		if (atoi(e->d_name) <= 1 || atoi(e->d_name) == getpid())
+			continue;
+		if (!proc_cmdline(atoi(e->d_name), buf, sizeof(buf)))
+			continue;
+		if (strstr(buf, pat)) {
+			alive = true;
+			break;
+		}
+	}
+	closedir(d);
+	return alive;
+}
+
+/* pid 身份复核：kill(pid,0) 只证明 pid 位被占用，pid 可能已被回收
+ * 复用给无关进程。命中 comm==name、cmdpat 或约定脚本名 <name>.sh
+ * 之一才认定是目标进程；cmdline 不可读（刚退出/内核线程）则放行。 */
+static bool pid_matches(long pid, const char *name, const char *cmdpat)
+{
+	char commp[48], comm[64], buf[512], shpat[72];
+
+	snprintf(commp, sizeof(commp), "/proc/%ld/comm", pid);
+	if (read_str_file(commp, comm, sizeof(comm)) &&
+	    !strcmp(comm, name))
+		return true;
+	if (!proc_cmdline(pid, buf, sizeof(buf)))
+		return true;            /* 无法取证时保守放行 */
+	if (cmdpat[0] && strstr(buf, cmdpat))
+		return true;
+	snprintf(shpat, sizeof(shpat), "%s.sh", name);
+	return strstr(buf, shpat) != NULL;
+}
 
 static const char *det_proc_down(const enc_cfg_t *c,
 				 char *reason, size_t rsz)
 {
-	static const struct { const char *label; char path[96]; } procs[] = {
-		{ "majestic",  "/var/run/majestic.pid" },
-	};
-	size_t base = sizeof(procs) / sizeof(procs[0]);
-	static char extra[3][32] = { "encoder_main.pid", "listener.pid",
-				     "heartbeat.pid" };
+	char list[256];
+	char *item, *save;
 	int dead = 0;
 
 	reason[0] = '\0';
-	for (size_t i = 0; i < base; i++) {
+	snprintf(list, sizeof(list), "%s", c->monitor_procs);
+	for (item = strtok_r(list, ",", &save); item;
+	     item = strtok_r(NULL, ",", &save)) {
+		char name[64], pidfile[128], cmdpat[128];
+		char *colon = strchr(item, ':');
+		char *colon2 = colon ? strchr(colon + 1, ':') : NULL;
 		long pid = -1;
-		bool alive;
+		bool alive = false;
 
-		if (!read_int_file(procs[i].path, &pid)) {
-			alive = false;
-		} else if (pid > 1 && kill((pid_t)pid, 0) == 0) {
-			alive = true;
-		} else {
-			alive = false;
+		/* 项格式 name[:pidfile[:cmdpat]]，允许空字段（listener::pat） */
+		if (colon)
+			*colon = '\0';
+		if (colon2)
+			*colon2 = '\0';
+		snprintf(name, sizeof(name), "%s", item);
+		snprintf(pidfile, sizeof(pidfile), "%s",
+			 colon ? colon + 1 : "");
+		snprintf(cmdpat, sizeof(cmdpat), "%s",
+			 colon2 ? colon2 + 1 : "");
+
+		/* 1) pid 文件探测：显式路径优先，省略时用 state 目录约定 */
+		{
+			char p[256];
+
+			if (pidfile[0])
+				snprintf(p, sizeof(p), "%s", pidfile);
+			else
+				snprintf(p, sizeof(p), "%s/%s.pid",
+					 c->state_dir, name);
+			if (read_int_file(p, &pid) && pid > 1 &&
+			    kill((pid_t)pid, 0) == 0) {
+				/* 显式 pidfile 可能由外部维护：pid 回收复用时
+				 * kill 探测会误判存活，需做身份复核；
+				 * state 目录 pid 由 claim_pidfile 维护，免复核 */
+				alive = pidfile[0] ? pid_matches(pid, name,
+								 cmdpat)
+						   : true;
+			}
 		}
+		/* 2) comm 精确匹配（C 二进制进程） */
+		if (!alive)
+			alive = comm_alive(name);
+		/* 3) cmdline 子串匹配（shell 脚本进程兜底） */
+		if (!alive)
+			alive = cmdline_alive(cmdpat);
+
 		if (!alive) {
 			strncat(reason, dead ? "," : "", rsz - strlen(reason));
-			strncat(reason, procs[i].label, rsz - strlen(reason));
+			strncat(reason, name, rsz - strlen(reason));
 			dead++;
 		}
 	}
-	for (size_t i = 0; i < 3; i++) {
-		char p[256], label[32];
-		char *dot;
-		long pid = -1;
-		bool alive;
-
-		state_path(c, extra[i], p, sizeof(p));
-		alive = read_int_file(p, &pid) &&
-			pid > 1 && kill((pid_t)pid, 0) == 0;
-		if (!alive) {
-			snprintf(label, sizeof(label), "%s", extra[i]);
-			dot = strrchr(label, '.');
-			if (dot)
-				*dot = '\0';     /* 去掉 .pid 后缀 */
-			strncat(reason, dead ? "," : "", rsz - strlen(reason));
-			strncat(reason, label, rsz - strlen(reason));
-			dead++;
-		}
-	}
-	(void)c;
 	return dead ? reason : NULL;
+}
+
+/* 递归建目录（crash_dir 在 SD 卡，可能不存在） */
+static void mkdir_p_local(const char *path)
+{
+	char tmp[400], *p;
+
+	snprintf(tmp, sizeof(tmp), "%s", path);
+	for (p = tmp + 1; *p; p++) {
+		if (*p == '/') {
+			*p = '\0';
+			mkdir(tmp, 0755);
+			*p = '/';
+		}
+	}
+	mkdir(tmp, 0755);
+}
+
+/* 风暴状态：<window_start> <count>，持久于 crash_dir（reboot 不丢） */
+static void storm_state_read(const enc_cfg_t *c, uint32_t *win, int *cnt)
+{
+	char path[300], buf[64];
+
+	*win = 0; *cnt = 0;
+	snprintf(path, sizeof(path), "%s/storm_state", c->crash_dir);
+	if (!read_str_file(path, buf, sizeof(buf)))
+		return;
+	sscanf(buf, "%u %d", win, cnt);
+}
+
+static void storm_state_write(const enc_cfg_t *c, uint32_t win, int cnt)
+{
+	char path[300];
+	FILE *f;
+
+	mkdir_p_local(c->crash_dir);
+	snprintf(path, sizeof(path), "%s/storm_state", c->crash_dir);
+	f = fopen(path, "w");
+	if (!f)
+		return;
+	fprintf(f, "%u %d\n", win, cnt);
+	fclose(f);
+}
+
+static long uptime_sec(void)
+{
+	char buf[64];
+	long up = 0;
+
+	if (read_str_file("/proc/uptime", buf, sizeof(buf)))
+		up = strtol(buf, NULL, 10);
+	return up;
+}
+
+/* 确认死亡联动：先取证（崩溃快照到 SD）再拉起（仅根进程），并做风暴升级 */
+static void cb_proc_restart(const enc_cfg_t *c, const det_t *d,
+			    const char *reason)
+{
+	char ctx[256], out[256];
+	uint32_t win = 0, now = (uint32_t)time(NULL);
+	int cnt = 0;
+	long ups = uptime_sec();
+
+	(void)d;
+
+	/* 1. 死亡快照：dmesg/业务日志/core 打包到 crash_dir（脚本幂等） */
+	snprintf(ctx, sizeof(ctx), "{\"procs\":\"%s\"}", reason ? reason : "");
+	action_run(c, "crash_snapshot", ctx, out, sizeof(out));
+	if (out[0])
+		log_msg(ENC_LOG_INFO, "crash snapshot: %s", out);
+
+	/* 2. 拉起：脚本内映射根进程（majestic/encoder_main 家族/ipc_server） */
+	action_run(c, "proc_restart", ctx, out, sizeof(out));
+	if (out[0])
+		log_msg(ENC_LOG_INFO, "proc restart: %s", out);
+
+	/* 3. 风暴统计（窗口外清零重计） */
+	storm_state_read(c, &win, &cnt);
+	if (!win || now < win || now - win >= (uint32_t)c->storm_window_sec) {
+		win = now;
+		cnt = 0;
+	}
+	cnt++;
+	storm_state_write(c, win, cnt);
+	log_msg(ENC_LOG_WARN, "proc restart storm count=%d/%d win=%us",
+		cnt, c->storm_max_restarts, c->storm_window_sec);
+	if (cnt < c->storm_max_restarts)
+		return;
+
+	/* 4. 达到上限 → 6104 fatal；开机 10min 内不 reboot，保持现场 */
+	{
+		char detail[256];
+
+		storm_state_write(c, win, 0);   /* 从新窗口重新计数 */
+		if (ups < REBOOT_MIN_UPTIME_SEC) {
+			snprintf(detail, sizeof(detail),
+				 "{\"count\":%d,\"uptimeSec\":%ld,"
+				 "\"action\":\"hold\"}", cnt, ups);
+			alert_raise(c, ALERT_PROC_STORM, "proc_restart_storm",
+				    "fatal",
+				    "进程反复崩溃且重启后仍未恢复，保持现场等待人工处理",
+				    detail);
+			log_msg(ENC_LOG_ERROR,
+				"ALERT %d storm hold: uptime=%lds too short to reboot",
+				ALERT_PROC_STORM, ups);
+		} else {
+			snprintf(detail, sizeof(detail),
+				 "{\"count\":%d,\"uptimeSec\":%ld,"
+				 "\"action\":\"reboot\"}", cnt, ups);
+			alert_raise(c, ALERT_PROC_STORM, "proc_restart_storm",
+				    "fatal",
+				    "进程反复崩溃，执行整机重启自愈",
+				    detail);
+			/* fatal 已入 spool/pipeline；reboot 前把滞留的推出去 */
+			alert_flush_pending(c);
+			log_msg(ENC_LOG_ERROR,
+				"ALERT %d storm reboot now: count=%d uptime=%lds",
+				ALERT_PROC_STORM, cnt, ups);
+			action_run(c, "reboot", "{}", out, sizeof(out));
+		}
+	}
 }
 
 /* ==================== 6. 推流健康 (7001/7002) ==================== */
@@ -775,7 +1021,7 @@ det_t *detectors_registry(void)
 	  { 8103, "mem_pressure", "error", "可用内存不足(%s)，OOM 风险" },
 	  { 0, "", "", "" } },
 
-	{ "proc_down",    15,  2, 3,  en_process, det_proc_down,    NULL,
+	{ "proc_down",    15,  2, 3,  en_process, det_proc_down,    cb_proc_restart,
 	  { 6103, "service_down", "error", "关键服务进程消亡(%s)" },
 	  { 0, "", "", "" } },
 

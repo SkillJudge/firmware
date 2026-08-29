@@ -296,6 +296,8 @@ int  feat_duration_check(void);
 
 /* dispatch：mq 收包入口（register_ack/heartbeat_ack 快速通道，其余入队） */
 void dispatch_on_message(const char *topic, const char *payload);
+/* mq_msg_cb 适配器（main.c 传给 mq_start 的回调） */
+void dispatch_mq_cb(void *ud, const char *topic, const char *payload);
 int  dispatch_init(void);               /* 启动 worker 线程 */
 void dispatch_shutdown(void);
 /* register 流程：发布 register（自增 msgId），等 registerAck(replyTo 匹配) */
