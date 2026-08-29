@@ -1,0 +1,56 @@
+#!/bin/sh
+#
+# encalertd — 编码器报警守护进程自启脚本。
+# 由 buildroot 打包阶段安装到 /etc/init.d/S43encalertd。
+# 原 S42system_monitor (bash 版) 已下线，encalertd 为唯一报警守护进程。
+
+DAEMON=/usr/sbin/encalertd
+CONF=/etc/encalertd.conf
+PIDFILE=/var/run/encalertd.pid
+
+case "$1" in
+    start)
+        echo -n "Starting encalertd: "
+        if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+            echo "already running"
+            exit 0
+        fi
+        rm -f "$PIDFILE"
+        "$DAEMON" -c "$CONF" -b
+        echo "OK"
+        ;;
+    stop)
+        echo -n "Stopping encalertd: "
+        if [ -f "$PIDFILE" ]; then
+            pid=$(cat "$PIDFILE" 2>/dev/null)
+            [ -n "$pid" ] && kill "$pid" 2>/dev/null
+            # 最多等 3 秒优雅退出（等 spool fsync 收尾）
+            n=0
+            while [ "$n" -lt 6 ] && kill -0 "$pid" 2>/dev/null; do
+                sleep 0.5; n=$((n + 1))
+            done
+        fi
+        killall encalertd 2>/dev/null
+        rm -f "$PIDFILE"
+        echo "OK"
+        ;;
+    restart|reload)
+        $0 stop
+        sleep 1
+        $0 start
+        ;;
+    status)
+        if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+            echo "running (pid=$(cat "$PIDFILE"))"
+        else
+            echo "stopped"
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+
+exit 0
