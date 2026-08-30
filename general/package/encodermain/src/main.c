@@ -171,7 +171,6 @@ static void supervisor_loop(void)
 			break;
 		majestic_recover();
 		feat_duration_check();
-		battery_low_shutdown_check(&g_app.cfg);
 	}
 }
 

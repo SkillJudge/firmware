@@ -1,5 +1,5 @@
 /*
- * battery.c — i2c-dev 电量/充电/低压关机兜底（逐条对齐 battery.sh）
+ * battery.c — i2c-dev 电量/充电（逐条对齐 battery.sh）
  *
  * 关键参数（照 battery.sh / config.sh 默认值）：
  *   库仑计 MAX170xx：/dev/i2c-1，地址 0x36，SMBus 字读 +
@@ -11,7 +11,7 @@
  *   → 回读。CHRG=P0(0x01)/STDBY=P1(0x02) 低有效：
  *     chrg=0,stdby=1 → 充电；chrg=1 → 未充电；0:0 歧义 → 回退 CRATE
  *   CRATE 回退滞回：≥+5 → 充电，≤-5 → 放电，0 附近保持原值
- *   低压关机：<3200mV → sync + 2s 后 poweroff；owner 文件活跃时让位
+ *   （低压关机已移交 encalertd，本模块不再做关机判定）
  */
 #define _GNU_SOURCE
 #include <errno.h>
@@ -44,11 +44,6 @@
 #define BATTERY_PROTECT_GPIO_MASK    0x07
 #define BATTERY_CHARGING_THRESHOLD_RAW     5
 #define BATTERY_DISCHARGING_THRESHOLD_RAW  (-5)
-#define BATTERY_LOW_SHUTDOWN_THRESHOLD_MV  3200
-#define BATTERY_LOW_SHUTDOWN_DELAY_SEC     2
-#define BATTERY_LOW_SHUTDOWN_COMMAND       "poweroff"
-#define BATTERY_LOW_SHUTDOWN_OWNER_FILE        "/tmp/alarm_monitor_power_shutdown.owner"
-#define BATTERY_LOW_SHUTDOWN_OWNER_MAX_AGE_SEC 5
 #define BATTERY_GPIO_SETTLE_SEC     1
 
 /* battery.c 与 led.c 操作同一颗 PCF8574（0x20），共享这把跨模块互斥锁
@@ -264,89 +259,6 @@ static void battery_refresh_charging_state(void)
 }
 
 /* ------------------------------------------------------------------ */
-/* 低压关机兜底                                                         */
-/* ------------------------------------------------------------------ */
-
-/* 报警监测进程活跃时让位（先报警、等 ACK、再关机由它负责）：
- * owner 文件 PID 存活、文件 5s 内有更新、且 cmdline 含 alarm_monitor.sh */
-static bool battery_low_shutdown_owner_alive(void)
-{
-	char buf[64];
-	char cmdpath[48];
-	char cmdline[128];
-	struct stat st;
-	FILE *f;
-	size_t n;
-	long pid;
-	time_t now = time(NULL);
-
-	if (!read_str_file(BATTERY_LOW_SHUTDOWN_OWNER_FILE, buf, sizeof(buf)))
-		return false;
-	pid = strtol(buf, NULL, 10);
-	if (pid <= 0)
-		return false;
-	if (stat(BATTERY_LOW_SHUTDOWN_OWNER_FILE, &st) != 0)
-		return false;
-	if ((long)now - (long)st.st_mtime >
-	    BATTERY_LOW_SHUTDOWN_OWNER_MAX_AGE_SEC)
-		return false;
-	if (kill((pid_t)pid, 0) != 0)
-		return false;
-
-	snprintf(cmdpath, sizeof(cmdpath), "/proc/%ld/cmdline", pid);
-	f = fopen(cmdpath, "r");
-	if (!f)
-		return false;
-	n = fread(cmdline, 1, sizeof(cmdline) - 1, f);
-	fclose(f);
-	cmdline[n > 0 ? n : 0] = '\0';
-	/* cmdline 以 '\0' 分隔参数，strstr 仍可命中 "alarm_monitor.sh" */
-	return strstr(cmdline, "alarm_monitor.sh") != NULL;
-}
-
-bool battery_low_shutdown_check(const enc_cfg_t *c)
-{
-	long voltage_mv;
-	pid_t pid;
-
-	(void)c;
-	if (!state_get_int("battery_voltage_mv", &voltage_mv))
-		return false;
-	if (battery_low_shutdown_owner_alive()) {
-		log_msg(ENCM_LOG_DEBUG,
-			"[BATTERY] low voltage shutdown delegated to alarm monitor");
-		return false;
-	}
-	if (voltage_mv >= BATTERY_LOW_SHUTDOWN_THRESHOLD_MV)
-		return false;
-
-	log_msg(ENCM_LOG_ERROR,
-		"[BATTERY] low voltage shutdown scheduled voltage_mv=%ld "
-		"threshold_mv=%d delay=%ds command=%s",
-		voltage_mv, BATTERY_LOW_SHUTDOWN_THRESHOLD_MV,
-		BATTERY_LOW_SHUTDOWN_DELAY_SEC, BATTERY_LOW_SHUTDOWN_COMMAND);
-
-	pid = fork();
-	if (pid < 0) {
-		log_msg(ENCM_LOG_ERROR,
-			"[BATTERY] fork shutdown helper failed errno=%d", errno);
-		return false;
-	}
-	if (pid == 0) {
-		/* 子进程：sync → 延迟 → 关机（对齐 bash 后台子 Shell） */
-		int delay = BATTERY_LOW_SHUTDOWN_DELAY_SEC;
-
-		sync();
-		while (delay-- > 0)
-			sleep(1);
-		execl("/bin/sh", "sh", "-c", BATTERY_LOW_SHUTDOWN_COMMAND,
-		      (char *)NULL);
-		_exit(127);
-	}
-	return true;
-}
-
-/* ------------------------------------------------------------------ */
 /* 刷新 state（键名照 state.sh：battery / battery_voltage_mv / is_charging） */
 /* ------------------------------------------------------------------ */
 
@@ -354,6 +266,8 @@ int battery_refresh(const enc_cfg_t *c)
 {
 	int percent = 0, mv = 0;
 	int ok = 0;
+
+	(void)c;		/* 低压关机判定已移交 encalertd */
 
 	if (battery_read_percent(&percent) == 0) {
 		state_set_int("battery", percent);
@@ -368,8 +282,6 @@ int battery_refresh(const enc_cfg_t *c)
 		state_set_int("battery_voltage_mv", mv);
 		log_msg(ENCM_LOG_DEBUG, "[BATTERY] voltage_mv=%d", mv);
 		ok++;
-		/* 电压有效才做低压关机判定（对齐 battery_refresh_state） */
-		battery_low_shutdown_check(c);
 	} else {
 		log_msg(ENCM_LOG_DEBUG,
 			"[BATTERY] voltage read failed, keep voltage_mv state");

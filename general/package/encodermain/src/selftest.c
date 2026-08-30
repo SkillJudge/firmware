@@ -204,8 +204,8 @@ int selftest_run(const enc_cfg_t *c)
 	else
 		st_fail_line("majestic", "进程未运行");
 
-	/* 8. HTTP 探测 /image.jpg 与 /play_audio（失败输出 DISABLED 而非 FAIL） */
-	st_check_http("http_capture", "/image.jpg", "抓拍", c);
+	/* 8. HTTP 探测 /play_audio（失败输出 DISABLED 而非 FAIL）；
+	 *    抓拍能力已移交上位机，不再探测 /image.jpg */
 	st_check_http("http_voice", "/play_audio", "语音", c);
 
 	/* 9. I2C 电量读（失败 DISABLED） */

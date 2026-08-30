@@ -2,8 +2,9 @@
  * feature_media.c — 推流/录像/抓拍/复位（yaml-cli + HUP）—— 设计 §6.2
  *
  * 逐条映射 bash feature_engine.sh 的状态机语义：
- *   stream_start/stop、record_start/stop、capture、reset_encoder、
+ *   stream_start/stop、record_start/stop、reset_encoder、
  *   task_prepare_desk_voice、duration 定时、startup 恢复。
+ *   （抓拍已移交上位机：协议保留 captureAck，设备端统一应答失败）
  *
  * yaml 键名与执行序列逐字对照 feature_engine.sh/common.sh：
  *   所有 yaml 修改都先 majestic_lock_acquire() 再 yaml-cli -i <conf> -s <key> <value>
@@ -44,7 +45,7 @@
 #define SUB_STREAM_SIZE         "640x360"
 #define SUB_STREAM_FPS          "15"
 #define STREAM_SUBSTREAM_DEF    "true"	/* config.sh STREAM_SUBSTREAM */
-#define SRS_HOST_DEFAULT        "123.60.51.11"	/* config.sh SRS_HOST 兜底 */
+#define SRS_HOST_DEFAULT        "192.168.250.100"	/* config.sh SRS_HOST 兜底（局域网服务器） */
 #define SRS_PORT_DEFAULT        "1935"
 #define SRS_APP_DEFAULT         "live"
 
@@ -439,8 +440,6 @@ static int wait_for_new_record_file(const enc_cfg_t *c, time_t min_ts,
 
 /* config.sh RECORD_REMOTE_ROOT（cfg 未包含，按固件默认硬编码） */
 #define RECORD_REMOTE_ROOT       "upload"
-#define CAPTURE_SNAPSHOT_URL     "http://127.0.0.1/image.jpg"
-#define CAPTURE_CURL_TIMEOUT_SEC 30
 #define STARTUP_RECORDS_SPLIT    "20"	/* MAJESTIC_STARTUP_RECORDS_SPLIT */
 #define STARTUP_RECORDS_PATH     "/mnt/mmcblk0p1/%F"
 #define STARTUP_RECORDS_MAXUSAGE "95"
@@ -458,20 +457,6 @@ static void build_record_remote_path(const enc_cfg_t *c, const char *record_id,
 {
 	snprintf(out, sz, "%s/%s/%s/%s", RECORD_REMOTE_ROOT,
 		 device_id_get(c), record_id, file_name);
-}
-
-/* build_capture_remote_path：capture/<device_id>/<capture_id>.jpg */
-static void build_capture_remote_path(const enc_cfg_t *c, const char *capture_id,
-				      char *out, size_t sz)
-{
-	snprintf(out, sz, "capture/%s/%s.jpg", device_id_get(c), capture_id);
-}
-
-/* config.sh CAPTURE_LOCAL_DIR（${APP_HOME}/media/capture） */
-static void capture_local_dir(const enc_cfg_t *c, char *out, size_t sz)
-{
-	snprintf(out, sz, "%s/media/capture",
-		 c->work_dir[0] ? c->work_dir : ENCM_WORK_DIR);
 }
 
 /* ---- segment_manifest（bash 工具兼容投影；追加在 upload.c 完成，
@@ -900,88 +885,6 @@ static int record_stop(const enc_cfg_t *c, const char *mode,
 }
 
 /* ------------------------------------------------------------------ */
-/* 抓拍（feature_capture_take）                                          */
-/* ------------------------------------------------------------------ */
-
-static int capture_take(const enc_cfg_t *c, const cmd_t *cmd, feat_result_t *r)
-{
-	char        capture_id[64], dir[512], local[600], rel[600], report[800];
-	char        esc[800], qlocal[700], qurl[128], cmdbuf[1600];
-	enc_runtime_t rt;
-	struct stat st;
-	db_rec_t    rec;
-
-	if (cmd->capture_id[0])
-		snprintf(capture_id, sizeof(capture_id), "%s", cmd->capture_id);
-	else
-		snprintf(capture_id, sizeof(capture_id), "%lld", now_ms());
-	capture_local_dir(c, dir, sizeof(dir));
-	dir_ensure(dir);
-	snprintf(local, sizeof(local), "%s/%s.jpg", dir, capture_id);
-
-	build_capture_remote_path(c, capture_id, rel, sizeof(rel));
-	rt_snapshot(&rt);
-	ftp_report_url(&rt, rel, report, sizeof(report));
-	/* bash：RESULT_CAPTURE_ID/FILE_NAME/FILE_URL 先置，失败再清 fileUrl */
-	json_escape(esc, sizeof(esc), capture_id);
-	extra_add(r, "\"captureId\":%s", esc);
-	snprintf(esc, sizeof(esc), "%s.jpg", capture_id);
-	{
-		char name_esc[800];
-
-		json_escape(name_esc, sizeof(name_esc), esc);
-		extra_add(r, "\"fileName\":%s", name_esc);
-	}
-	json_escape(esc, sizeof(esc), report);
-	extra_add(r, "\"fileUrl\":%s", esc);
-	snprintf(r->last_file, sizeof(r->last_file), "%s.jpg", capture_id);
-
-	log_msg(ENCM_LOG_INFO,
-		"media: capture request capture_id=%s snapshot_url=%s",
-		capture_id, CAPTURE_SNAPSHOT_URL);
-
-	shell_quote(qlocal, sizeof(qlocal), local);
-	shell_quote(qurl, sizeof(qurl), CAPTURE_SNAPSHOT_URL);
-	snprintf(cmdbuf, sizeof(cmdbuf), "curl -sS -o %s %s", qlocal, qurl);
-	if (run_cmd(cmdbuf, CAPTURE_CURL_TIMEOUT_SEC, NULL, 0) == 0 &&
-	    stat(local, &st) == 0 && st.st_size > 0 &&
-	    upload_file(c, &rt, local, rel) == 0) {
-		/* db 登记 kind=capture（上传成功 → uploaded 终态） */
-		memset(&rec, 0, sizeof(rec));
-		snprintf(rec.file, sizeof(rec.file), "%s", local);
-		snprintf(rec.kind, sizeof(rec.kind), "capture");
-		snprintf(rec.record_id, sizeof(rec.record_id), "%s", capture_id);
-		rec.size = (long long)st.st_size;
-		rec.mtime = (long long)st.st_mtime;
-		rec.state = DB_UPLOADED;
-		rec.ts = now_ms();
-		encdb_rec_add(&rec);
-		result_ok(r, 0, "success");
-		log_msg(ENCM_LOG_INFO,
-			"media: capture success capture_id=%s local_file=%s remote_path=%s",
-			capture_id, local, rel);
-		return 0;
-	}
-
-	unlink(local);
-	/* bash：失败清空 RESULT_FILE_URL，保留 captureId/fileName */
-	r->extra_json[0] = '\0';
-	json_escape(esc, sizeof(esc), capture_id);
-	extra_add(r, "\"captureId\":%s", esc);
-	snprintf(esc, sizeof(esc), "%s.jpg", capture_id);
-	{
-		char name_esc[800];
-
-		json_escape(name_esc, sizeof(name_esc), esc);
-		extra_add(r, "\"fileName\":%s", name_esc);
-	}
-	r->last_file[0] = '\0';
-	result_ok(r, -1, "fail");
-	log_msg(ENCM_LOG_ERROR, "media: capture failed capture_id=%s", capture_id);
-	return -1;
-}
-
-/* ------------------------------------------------------------------ */
 /* 任务语音预备（feature_task_prepare_desk_voice）                        */
 /* ------------------------------------------------------------------ */
 
@@ -1110,8 +1013,14 @@ int feat_execute(const cmd_t *c, feat_result_t *r)
 		rc = record_start(&g_app.cfg, "record", c, r);
 	else if (!strcmp(c->flow, "record") && !strcmp(c->action, "stop_record"))
 		rc = record_stop(&g_app.cfg, "record", c->record_id, r);
-	else if (!strcmp(c->flow, "capture") && !strcmp(c->action, "capture"))
-		rc = capture_take(&g_app.cfg, c, r);
+	else if (!strcmp(c->flow, "capture") && !strcmp(c->action, "capture")) {
+		/* 抓拍能力已移交上位机：设备端关闭，协议保留 captureAck 统一应答失败 */
+		log_msg(ENCM_LOG_WARN,
+			"media: capture disabled on device, reject capture_id=%s",
+			c->capture_id);
+		result_ok(r, -1, "fail");
+		rc = -1;
+	}
 	else if (!strcmp(c->flow, "stream") && !strcmp(c->action, "start_stream"))
 		rc = stream_start(&g_app.cfg, "stream", c, r);
 	else if (!strcmp(c->flow, "stream") && !strcmp(c->action, "stop_stream"))

@@ -369,7 +369,6 @@ int http_post_file(const char *host, int port, const char *path,
 /* ------------------------------------------------------------------ */
 
 int  battery_refresh(const enc_cfg_t *c);   /* 刷新 state 三键，0 成功 */
-bool battery_low_shutdown_check(const enc_cfg_t *c); /* 低压关机兜底 */
 int  led_init(const enc_cfg_t *c);
 void led_upload_token_set(const char *tag, bool on); /* token 目录驱动闪烁 */
 void led_shutdown(void);
