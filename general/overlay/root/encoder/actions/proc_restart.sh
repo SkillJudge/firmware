@@ -8,10 +8,11 @@
 #       单独拉起会破坏家族关系 → 只随根进程一起重启。
 # 映射:
 #   majestic      -> /etc/init.d/S95majestic start
-#   encoder_main  -> /etc/init.d/S99zzencoder start（家族根，含 listener/heartbeat）
-#   listener/heartbeat -> 不单独拉起（skip，随 encoder_main）
+#   encodermain   -> /etc/init.d/S96encodermain start（C 版主控，固件 3.2.0 起）
+#   encoder_main  -> (legacy) bash 版 S99zzencoder 已下线，仅保留占位不动作
+#   listener/heartbeat -> 不单独拉起（skip，legacy 子进程随 bash 家族）
 #   ipc_server (factoryinit 服务) -> /etc/init.d/S99factoryinit start
-# 输出: {"restarted":"encoder_main","skipped":"listener,heartbeat"}
+# 输出: {"restarted":"encodermain","skipped":"listener,heartbeat"}
 # =============================================================
 JQ=/root/resources/jq
 
@@ -30,11 +31,15 @@ echo "$PROCS" | tr ',' '\n' | while IFS= read -r p; do
             /etc/init.d/S95majestic start >/dev/null 2>&1
             echo "majestic"
             ;;
+        encodermain)
+            # C 版主控：清理残留 pid 文件（S96encodermain 的 PIDFILE），
+            # 避免 encalertd 显式 pidfile 探测在启动窗口期旧 pid 再次误判
+            rm -f "$STATE_DIR/pid"
+            /etc/init.d/S96encodermain start >/dev/null 2>&1
+            echo "encodermain"
+            ;;
         encoder_main)
-            # 清理残留 pid 文件，避免启动窗口期旧 pid 再次误判
-            rm -f "$STATE_DIR/encoder_main.pid"
-            /etc/init.d/S99zzencoder start >/dev/null 2>&1
-            echo "encoder_main"
+            : # legacy bash 家族：S99zzencoder 已下线，不做动作
             ;;
         listener|heartbeat)
             : # 子进程不单独拉起
@@ -51,7 +56,7 @@ done | {
     R=""; S=""
     while IFS= read -r line; do
         case "$line" in
-            majestic|encoder_main|ipc_server) R="${R:+$R,}$line" ;;
+            majestic|encodermain|ipc_server) R="${R:+$R,}$line" ;;
             *) ;;
         esac
     done
