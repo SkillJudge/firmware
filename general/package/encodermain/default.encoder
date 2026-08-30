@@ -1,0 +1,11 @@
+# /etc/default/encoder — encodermain / encalertd 运行环境覆盖模板
+# 由 S96encodermain 启动脚本 source。
+#
+# 默认情况下无需任何配置：
+#   MQTT/FTP/SRS 参数继承 /root/encoder/config.sh（registerAck 下发值优先）；
+#   DEVICE_ID 权威来源为 U-Boot env 分区（factoryinit 换取后写入，
+#   固件升级只刷 rootfs 不刷 env）。
+#
+# 仅当现场需要覆盖时取消注释：
+# ENC_MQTT_PASS=            # 覆盖 MQTT 密码（config.sh 的 MQTT_PASS 之上）
+# DEVICE_ID=                # 覆盖设备 ID（一般禁用：出厂必须走 factoryinit 写 env）

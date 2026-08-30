@@ -1,10 +1,11 @@
 config BR2_PACKAGE_ENCODERMAIN
 	bool "encodermain"
-	default n
+	default y
 	help
 	  编码器主控进程（原 /root/encoder/encoder_main.sh bash 脚本群的 C 重写版）。
 	  常驻 MQTT 订阅客户端 / 命令派发与幂等 / Majestic 推流录像控制 / 语音 /
 	  encdb 单文件数据库（录像上传账本 + 断网重传）由 C 控制。
 	  设计文档见 encoder/EncoderMainDesign.md。
-	  注意：测试完成前保持 default n，不进固件默认编译；
-	  板端用 /mnt/mmcblk0p1/bin/encodermain 快速验证。
+	  2026-08-31 起 C 版通过大循环打包进固件（/usr/sbin/encodermain），
+	  由 S96encodermain 自启；bash 版脚本群文件保留在 /root/encoder/ 下
+	  （仅下线 S99zzencoder 启动服务），现场确认后再手动清理。

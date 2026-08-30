@@ -45,7 +45,8 @@ fi
 section "Shell scripts syntax check (sh -n)"
 SYNTAX_TARGETS=(
     "general/overlay/etc/init.d/S40network"
-    "general/overlay/etc/init.d/S99zzencoder"
+    "general/package/encalertd/S43encalertd"
+    "general/package/encodermain/S96encodermain"
     "general/overlay/etc/init.d/S15_i2c_init"
     "general/overlay/etc/init.d/rcS"
     "general/overlay/etc/rc.local"
@@ -97,7 +98,8 @@ done
 section "Overlay structure check"
 for item in \
     "general/overlay/etc/init.d/S40network" \
-    "general/overlay/etc/init.d/S99zzencoder" \
+    "general/overlay/root/encoder/actions/shutdown_lowbattery.sh" \
+    "general/overlay/root/encoder/actions/stream_hup_majestic.sh" \
     "general/overlay/usr/bin/ircut_demo" \
     "general/overlay/usr/bin/led_test.sh"
 do

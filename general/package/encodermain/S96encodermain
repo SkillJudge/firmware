@@ -1,0 +1,79 @@
+#!/bin/sh
+#
+# encodermain — 编码器主控 C 版自启脚本。
+# 由 buildroot 打包阶段安装到 /etc/init.d/S96encodermain。
+# 启动顺序：S95majestic 之后（推流/录像依赖 Majestic，异常恢复由 C 版
+# 守护循环自处理）；S43encalertd 先行启动负责监护。
+#
+# 设备初始化说明：固件烧写后 env 分区无 DEVICE_ID（factoryinit 连接服务
+# 器换取后写入）。encodermain 启动时自行检测：无 DEVICE_ID 则门卫等待
+# （不连 MQTT / 不动 Majestic，每 10s 重探），写入后自动继续启动。
+
+DAEMON=/usr/sbin/encodermain
+RUNTIME=/root/encoder/runtime
+PIDFILE="$RUNTIME/state/pid"
+
+# 环境覆盖通道：/etc/default/encoder（默认注释，凭据继承 /root/encoder/config.sh）
+[ -f /etc/default/encoder ] && . /etc/default/encoder
+
+start() {
+    echo -n "Starting encodermain: "
+    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+        echo "already running"
+        return 0
+    fi
+    if [ ! -x "$DAEMON" ]; then
+        echo "FAILED (missing $DAEMON)"
+        return 1
+    fi
+    mkdir -p "$RUNTIME/state" "$RUNTIME/logs"
+    cd "$RUNTIME" || return 1
+    # -b 后台守护；凭据/服务器等全部由 /root/encoder/config.sh 继承或
+    # registerAck 下发覆盖，无需在此导出。
+    "$DAEMON" -b
+    echo "OK"
+}
+
+stop() {
+    echo -n "Stopping encodermain: "
+    local pid
+    pid=$(cat "$PIDFILE" 2>/dev/null)
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        kill "$pid" 2>/dev/null
+        n=0
+        while kill -0 "$pid" 2>/dev/null && [ "$n" -lt 10 ]; do
+            sleep 1; n=$((n + 1))
+        done
+    fi
+    killall encodermain 2>/dev/null
+    rm -f "$PIDFILE"
+    echo "OK"
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        stop
+        sleep 1
+        start
+        ;;
+    status)
+        if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE" 2>/dev/null)" 2>/dev/null; then
+            echo "running (pid=$(cat "$PIDFILE"))"
+        else
+            echo "stopped"
+            exit 1
+        fi
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+
+exit 0

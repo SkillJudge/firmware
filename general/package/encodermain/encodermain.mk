@@ -2,22 +2,22 @@
 #
 # encodermain — 编码器主控进程（C 实现）
 #
-# 与 encalertd 同款 generic-package 模式：
-#   1. EXTRACT：把本地 src/* 复制到编译目录
-#   2. BUILD  ：用 buildroot 提供的 TARGET_CC 编译
-#   3. INSTALL：二进制 -> /usr/sbin/encodermain
+# 与 factoryinit 同款 generic-package 本地包模式：
+#   1. SITE_METHOD=local：把本地 src/ 复制到编译目录
+#   2. BUILD            ：用 buildroot 提供的 TARGET_CC 编译
+#   3. INSTALL          ：二进制 -> /usr/sbin/encodermain
+#                         自启脚本 -> /etc/init.d/S96encodermain
+#                         环境模板 -> /etc/default/encoder
 #
-# 注意（项目约束）：测试完成前不进固件默认编译（Config.in 为 default n）；
-# 启动入口仍由 overlay 的 start_encoder.sh 控制，可经 ENCODER_MAIN_BIN
-# 环境变量选用 /mnt/mmcblk0p1/bin/encodermain 快速验证并一键回滚 bash 版。
+# 2026-08-31 起正式进入大循环编译打包（Config.in default y）；
+# bash 版启动服务 S99zzencoder 已从 overlay 删除，bash 脚本群文件保留。
 #
 ################################################################################
 
+ENCODERMAIN_VERSION = 3.2.0
+ENCODERMAIN_SITE = $(ENCODERMAIN_PKGDIR)/src
+ENCODERMAIN_SITE_METHOD = local
 ENCODERMAIN_LICENSE = Public Domain
-
-define ENCODERMAIN_EXTRACT_CMDS
-	cp -avr $(ENCODERMAIN_PKGDIR)/src/*.c $(ENCODERMAIN_PKGDIR)/src/*.h $(@D)/
-endef
 
 ENCODERMAIN_MAKE_OPTS = \
 	CC="$(TARGET_CC)"
@@ -28,6 +28,8 @@ endef
 
 define ENCODERMAIN_INSTALL_TARGET_CMDS
 	$(INSTALL) -m 0755 -D $(@D)/encodermain $(TARGET_DIR)/usr/sbin/encodermain
+	$(INSTALL) -m 0755 -D $(ENCODERMAIN_PKGDIR)/S96encodermain $(TARGET_DIR)/etc/init.d/S96encodermain
+	$(INSTALL) -m 0644 -D $(ENCODERMAIN_PKGDIR)/default.encoder $(TARGET_DIR)/etc/default/encoder
 endef
 
 $(eval $(generic-package))

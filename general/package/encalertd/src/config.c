@@ -89,15 +89,13 @@ static void cfg_defaults(enc_cfg_t *c)
 	c->charge_drop_mv     = 80;        /* 充电尾段实测波动 ~74mV，30 会误报 2001 */
 	c->record_min_free_mb = 5120;      /* 5GB：足够一轮应急录像的底线 */
 
-	/* 进程监控：majestic 固定 pid 文件路径；encoder_main/listener/heartbeat
-	 * 是 shell 脚本进程（comm 为解释器名 "sh"，comm 匹配失效），探测链 =
-	 * state pid 文件 → comm 兜底 → cmdline 子串匹配（cmdpat 字段）；
+	/* 进程监控（2026-08-31 起 C 版 encodermain 进固件，bash 家族名移除）：
+	 * majestic 固定 pid 文件路径；encodermain 用 lock.c 单实例 pid
+	 * （state_dir/pid，显式 pidfile 命中后做身份复核防 pid 回收）；
 	 * ipc_server(=factoryinit 服务) 无 pid 文件，走 /proc comm 扫描 */
 	snprintf(c->monitor_procs, sizeof(c->monitor_procs),
 		 "majestic:/var/run/majestic.pid,"
-		 "encoder_main::encoder_main.sh,"
-		 "listener::app_service.sh listener,"
-		 "heartbeat::app_service.sh heartbeat,"
+		 "encodermain:/root/encoder/runtime/state/pid,"
 		 "ipc_server");
 	c->storm_window_sec   = 900;       /* 15min 窗口 */
 	c->storm_max_restarts = 3;         /* 窗口内拉起 ≥3 次升级 reboot */

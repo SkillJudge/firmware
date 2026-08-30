@@ -1,4 +1,4 @@
-config BR2_PACKAGE_ENCALLOCERTD
+config BR2_PACKAGE_ENCALERTD
 	bool "encalertd"
 	default y
 	help
@@ -6,3 +6,5 @@ config BR2_PACKAGE_ENCALLOCERTD
 	  主循环 / MQTT 上报（QoS1+spool 必达）/ 报警去重由 C 控制，
 	  具体恢复动作调用 /root/encoder/actions/*.sh 小脚本。
 	  设计文档见 encoder/EncoderAlertdDesign.md。
+	  注意：符号名与 .mk 变量前缀必须为 ENCALERTD
+	  （2026-08-31 修正，原 ENCALLOCERTD 拼写导致钩子不被识别）。
