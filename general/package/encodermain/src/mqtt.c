@@ -865,7 +865,6 @@ mq_client_t *mq_start(const enc_cfg_t *c, mq_msg_cb msg_cb,
 		      mq_event_cb ev_cb, void *ud)
 {
 	mq_client_t *m = (mq_client_t *)calloc(1, sizeof(*m));
-	FILE *fp;
 
 	if (!m)
 		return NULL;
@@ -878,20 +877,12 @@ mq_client_t *mq_start(const enc_cfg_t *c, mq_msg_cb msg_cb,
 	pthread_mutex_init(&m->mu, NULL);
 	snprintf(m->filter, sizeof(m->filter), "+/+/encoder/%s/#",
 		 device_id_get(c));
-	fp = fopen("/etc/hostname", "r");
-	if (fp) {
-		char h[64];
-		size_t n = fread(h, 1, sizeof(h) - 1, fp);
-
-		fclose(fp);
-		while (n > 0 && (h[n - 1] == '\n' || h[n - 1] == '\r'))
-			h[--n] = '\0';
-		if (h[0])
-			snprintf(m->cid, sizeof(m->cid), "encmain-%.40s", h);
-	}
-	if (!m->cid[0])
-		snprintf(m->cid, sizeof(m->cid), "encmain-%ld",
-			 (long)getpid());
+	/* client id 必须全局唯一：用 device_id（设备唯一标识）。
+	 * 不能用 hostname——出厂默认 openipc-gk7205v300 三台全相同，
+	 * 多机并发时 broker 按 client id 挤掉旧连接，互踢形成 1s 重连震荡
+	 * （2026-08-30 多机基线测试发现的缺陷） */
+	snprintf(m->cid, sizeof(m->cid), "encmain-%.60s",
+		 device_id_get(c));
 	snprintf(m->outbox_dir, sizeof(m->outbox_dir), "%s", c->outbox_dir);
 	dir_ensure(m->outbox_dir);
 	outbox_load(m);

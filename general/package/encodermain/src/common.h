@@ -101,7 +101,7 @@ typedef struct {
 } enc_cfg_t;
 
 int         cfg_load(enc_cfg_t *c, const char *conf_path);
-const char *device_id_get(const enc_cfg_t *c);  /* 带缓存三级解析 */
+const char *device_id_get(const enc_cfg_t *c);  /* env 权威解析；未初始化返回空串且不缓存 */
 
 /* ------------------------------------------------------------------ */
 /* 日志 / 工具（util.c）                                                */

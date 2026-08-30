@@ -967,8 +967,31 @@ static const char *det_record_purge(const enc_cfg_t *c,
 	return NULL;
 }
 
+/* ==================== 0. 设备初始化监护 (9001 error / 9002 info) ====================
+ * env 分区无 DEVICE_ID = factoryinit 未完成（出厂烧写后 env 无此变量，
+ * 须由 factoryinit 连接服务器换取后写入；固件升级不刷 env 分区）。
+ * 业务完全不可用，confirm=1 立即告警；factoryinit 写入后发 9002 恢复。
+ * reason 附带 ethaddr，便于多机场景定位具体是哪台未初始化。
+ */
+static const char *det_deviceid(const enc_cfg_t *c, char *reason, size_t rsz)
+{
+	char eth[32];
+
+	(void)c;
+	if (!device_id_uninitialized())
+		return NULL;
+	eth[0] = '\0';
+	device_ethaddr_get(eth, sizeof(eth));
+	if (eth[0])
+		snprintf(reason, rsz, "DEVICE_ID missing (eth=%s)", eth);
+	else
+		snprintf(reason, rsz, "DEVICE_ID missing");
+	return reason;
+}
+
 /* ==================== 使能开关包装 ==================== */
 
+static bool en_always(const enc_cfg_t *c) { (void)c; return true; }
 static bool en_sdcard(const enc_cfg_t *c) { return c->enable_sdcard; }
 static bool en_battery(const enc_cfg_t *c) { return c->enable_battery; }
 static bool en_sysres(const enc_cfg_t *c) { return c->enable_sysres; }
@@ -982,6 +1005,10 @@ det_t *detectors_registry(void)
 {
 	static det_t D[] = {
 	/* name           ev   cf rc  enabled    check              cb                    fail-alert                     recover                   */
+	{ "deviceid",     30,  1, 1,  en_always, det_deviceid,      NULL,
+	  { 9001, "device_uninitialized", "error", "设备未初始化(%s)，等待 factoryinit 写入 DEVICE_ID" },
+	  { 9002, "device_initialized", "info", "设备初始化完成，DEVICE_ID 已就绪" } },
+
 	{ "sd_missing",   20,  2, 2,  en_sdcard, det_sd_missing,    NULL,
 	  { 4001, "sdcard_missing",  "error", "SD 卡未挂载，自动重挂仍失败(%s)" },
 	  { 0, "", "", "" } },

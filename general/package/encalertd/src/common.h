@@ -80,7 +80,13 @@ typedef struct {
 } enc_cfg_t;
 
 int  cfg_load(enc_cfg_t *c, const char *path);
-const char *device_id_get(const enc_cfg_t *c);   /* 带缓存的三级解析 */
+/* device_id 解析（env 分区权威，见 alert.c 注释）：
+ * 读到合法 DEVICE_ID 后缓存；未初始化时告警 topic 回退 ethaddr/unknown。 */
+const char *device_id_get(const enc_cfg_t *c);
+/* 设备是否未初始化（env 无合法 DEVICE_ID = factoryinit 未完成），现场重探 */
+bool device_id_uninitialized(void);
+/* ethaddr（冒号剔除），未初始化期的告警投递回退身份 */
+bool device_ethaddr_get(char *out, size_t sz);
 
 /* ------------------------------------------------------------------ */
 /* 日志 / 工具                                                          */

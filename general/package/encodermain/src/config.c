@@ -6,7 +6,8 @@
  *   2) /root/encoder/config.sh 全键继承（KEY="value" 格式，键存在才映射）
  *   3) 环境变量 DEVICE_ID / ENC_MQTT_PASS（凭据不落明文 conf）
  *   4) conf 文件覆盖（最高优先级，键名 = common.h 字段名）
- * device_id 三级解析：cfg 继承值 → fw_printenv DEVICE_ID → /etc/hostname。
+ * device_id 解析（env 分区权威）：cfg 显式配置 → fw_printenv DEVICE_ID；
+ * 均缺失 = 设备未初始化，返回空串（main 门卫等待，见 main.c）。
  */
 #define _GNU_SOURCE
 #include <stdio.h>
@@ -17,7 +18,6 @@
 #include "common.h"
 
 #define ENC_VERSION_FILE "/etc/version"
-#define ENC_HOSTNAME_FILE "/etc/hostname"
 
 static void set_str(char *dst, size_t sz, const char *v)
 {
@@ -318,8 +318,13 @@ static bool device_id_valid(const char *id)
 	return true;
 }
 
-/* device_id 三级解析（带缓存）：
- * cfg 继承值 → fw_printenv -n DEVICE_ID（start_encoder.sh 同源）→ /etc/hostname */
+/* device_id 解析（env 分区权威）：
+ *   1) cfg 显式配置（config.sh 继承 / 环境变量 / conf，测试与部署覆盖用）
+ *   2) fw_printenv -n DEVICE_ID（start_encoder.sh 同源；factoryinit 用硬件 id
+ *      向中心服务器换取后写入 env 分区，固件升级只刷 rootfs 不刷 env）
+ * 两级都取不到 = 设备未正确初始化，返回空串且不缓存——调用方可周期重探，
+ * factoryinit 写入后无需重启进程即可就绪。hostname 不再兜底：出厂 hostname
+ * 三台相同且与设备身份无关（2026-08-30 多机联调结论）。 */
 const char *device_id_get(const enc_cfg_t *c)
 {
 	static char cached[64];
@@ -328,26 +333,21 @@ const char *device_id_get(const enc_cfg_t *c)
 
 	if (resolved)
 		return cached;
-	resolved = true;
-	cached[0] = '\0';
 
 	if (c && c->device_id[0] && device_id_valid(c->device_id)) {
+		resolved = true;
 		set_str(cached, sizeof(cached), c->device_id);
 		return cached;
 	}
 	/* U-Boot 环境变量 DEVICE_ID（start_encoder.sh: fw_printenv -n DEVICE_ID） */
 	if (run_cmd("fw_printenv -n DEVICE_ID", 5, buf, sizeof(buf)) == 0 &&
 	    device_id_valid(buf)) {
-		set_str(cached, sizeof(cached), buf);
-		return cached;
-	}
-	/* 兜底：主机名 */
-	if (read_str_file(ENC_HOSTNAME_FILE, buf, sizeof(buf)) &&
-	    device_id_valid(buf)) {
+		resolved = true;
 		set_str(cached, sizeof(cached), buf);
 		return cached;
 	}
 	log_msg(ENCM_LOG_ERROR,
-		"device id missing: set DEVICE_ID env or U-Boot DEVICE_ID");
-	return cached;
+		"device not initialized: U-Boot DEVICE_ID missing "
+		"(factoryinit not finished?)");
+	return cached;	/* 空串；resolved 保持 false，下次调用重探 */
 }

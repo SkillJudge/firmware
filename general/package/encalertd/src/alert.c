@@ -40,50 +40,97 @@ static struct {
     char     last_err_kind[20]; /* tcp | connack | puback   */
 } g_al;
 
-/* ---------------- device_id 三级解析 ---------------- */
+/* ---------------- device_id 解析（env 分区权威） ----------------
+ *
+ * DEVICE_ID 由 factoryinit 用硬件 id 向中心服务器换取后写入 env 分区
+ * （固件升级只刷 rootfs，不刷 env）。解析规则：
+ *   1. fw_printenv -n DEVICE_ID 读到合法值 = 唯一权威，缓存；
+ *   2. 读不到 = 设备未正确初始化（device_id_uninitialized() == true，
+ *      由 deviceid 检测器发 9001 告警）。此时告警 topic 设备段回退
+ *      ethaddr（去冒号），保证未初始化设备的告警仍可按机投递；
+ *      ethaddr 也读不到时用 "unknown"。
+ *   3. 回退值不缓存：factoryinit 写入 DEVICE_ID 后自动切回权威值，
+ *      无需重启进程。
+ * 出厂 hostname 三台相同，与设备身份无关，不再作兜底；state/device_id
+ * 为 bash 时代遗留缓存，同样不再信任（2026-08-31 口径收紧）。
+ */
+
+/* env DEVICE_ID 探测：读到且合法（对齐 encodermain is_valid_device_id）
+ * 返回 true。未定义时 fw_printenv -n 输出空 + 退出码 1（真机实测）。 */
+static bool env_devid_probe(char *out, size_t sz)
+{
+	FILE *f = popen("fw_printenv -n DEVICE_ID 2>/dev/null", "r");
+	size_t n = 0;
+
+	if (!f)
+		return false;
+	n = fread(out, 1, sz - 1, f);
+	pclose(f);
+	while (n > 0 && (out[n-1] == '\n' || out[n-1] == '\r'
+	    || out[n-1] == ' ' || out[n-1] == '\t'))
+		out[--n] = '\0';
+	out[n] = '\0';
+	if (!n)
+		return false;
+	for (size_t i = 0; i < n; i++) {
+		char ch = out[i];
+
+		if (!((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') ||
+		      (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' ||
+		      ch == '-'))
+			return false;
+	}
+	return true;
+}
+
+/* ethaddr（冒号剔除），仅作未初始化期的告警投递回退身份 */
+bool device_ethaddr_get(char *out, size_t sz)
+{
+	FILE *f = popen("fw_printenv -n ethaddr 2>/dev/null", "r");
+	size_t n = 0;
+
+	if (!f)
+		return false;
+	n = fread(out, 1, sz - 1, f);
+	pclose(f);
+	while (n > 0 && (out[n-1] == '\n' || out[n-1] == '\r'))
+		out[--n] = '\0';
+	for (size_t i = 0; i < n; i++)
+		if (out[i] == ':')
+			memmove(&out[i], &out[i + 1], n - i), n--;
+	out[n] = '\0';
+	return n > 0;
+}
 
 const char *device_id_get(const enc_cfg_t *c)
 {
 	static char devid[64];
-	static int  resolved;
-	char buf[64];
+	static int  env_ok;
 
-	if (resolved && devid[0])
+	(void)c;
+	if (env_ok)
 		return devid;
-
-	/* 1. state_dir/device_id（bash 维护的权威来源） */
-	snprintf(buf, sizeof(buf), "%s/device_id", c->state_dir);
-	if (read_str_file(buf, devid, sizeof(devid)) && devid[0]) {
-		resolved = 1;
+	if (env_devid_probe(devid, sizeof(devid))) {
+		env_ok = 1;
 		return devid;
 	}
-	/* 2. /etc/hostname */
-	if (read_str_file("/etc/hostname", devid, sizeof(devid)) && devid[0]) {
-		resolved = 1;
-		return devid;
-	}
-	/* 3. fw_printenv ethaddr（冒号剔除） */
+	/* 未初始化：回退 ethaddr / unknown（不缓存，等 DEVICE_ID 写入） */
 	{
-		FILE *f = popen("fw_printenv -n ethaddr 2>/dev/null", "r");
-		if (f) {
-			size_t n = fread(devid, 1, sizeof(devid) - 1, f);
-			pclose(f);
-			while (n > 0 && (devid[n-1] == '\n' || devid[n-1] == '\r'))
-				devid[--n] = '\0';
-			for (size_t i = 0; i < n; i++)
-				if (devid[i] == ':')
-					memmove(&devid[i], &devid[i + 1],
-						n - i), n--;
-			devid[n] = '\0';
-			if (devid[0]) {
-				resolved = 1;
-				return devid;
-			}
-		}
+		static char fb[64];
+
+		if (device_ethaddr_get(fb, sizeof(fb)))
+			return fb;
 	}
-	resolved = 1;
-	snprintf(devid, sizeof(devid), "unknown");
-	return devid;
+	return "unknown";
+}
+
+/* 设备是否未初始化（env 无合法 DEVICE_ID）。每次现场重探，调用方为
+ * deviceid 检测器（30s 周期），无性能压力；不缓存失败结果。 */
+bool device_id_uninitialized(void)
+{
+	char probe[64];
+
+	return !env_devid_probe(probe, sizeof(probe));
 }
 
 /* ---------------- fs helpers ---------------- */

@@ -2,10 +2,11 @@
  * main.c — encodermain 入口
  *
  * 流程（对齐 bash encoder_main.sh）：
- *   参数 → 配置 → state/encdb 初始化 → 外设初始化（LED/电池/语音）
+ *   参数 → 配置 → 设备初始化门卫（env 无 DEVICE_ID 时等待 factoryinit，
+ *   业务不启动）→ state/encdb 初始化 → 外设初始化（LED/电池/语音）
  *   → 启动恢复 Majestic 默认 profile → 常驻 MQTT → 命令 worker
  *   → register 重试循环（10s 等 ACK / 5s 重试）→ 心跳+上传线程
- *   → 守护主循环（Majestic 存活恢复 / duration 到期 / 低压关机兜底）
+ *   → 守护主循环（Majestic 存活恢复 / duration 到期）
  *   → SIGTERM 清理（恢复 profile → 退出）
  *
  * 独立运行模式（不进守护流程）：
@@ -332,6 +333,37 @@ int main(int argc, char **argv)
 	/* 4. 单实例 */
 	if (single_instance_lock() != 0)
 		return 1;
+
+	/* 4.5 设备初始化门卫：env 分区无 DEVICE_ID = factoryinit 未完成
+	 * （出厂烧写只刷固件不刷 env，DEVICE_ID 须由 factoryinit 换取后写入），
+	 * 后续业务完全不可用。此阶段不启动 MQTT/register/媒体任何流程，
+	 * 每 10s 重探一次；factoryinit 写入后自动继续正常启动，无需重启进程。
+	 * encalertd 侧同一判定由 deviceid 检测器发 9001 告警。 */
+	{
+		long probes = 0;
+
+		while (!g_app.stopping && !device_id_get(&g_app.cfg)[0]) {
+			if (probes == 0)
+				log_msg(ENCM_LOG_ERROR,
+					"device not initialized: no DEVICE_ID "
+					"in flash env, waiting for factoryinit");
+			else if (probes % 60 == 0)
+				log_msg(ENCM_LOG_WARN,
+					"still not initialized after %ld s, "
+					"keep waiting",
+					probes * 10);
+			probes++;
+			for (int i = 0; i < 10 && !g_app.stopping; i++)
+				sleep(1);
+		}
+		if (g_app.stopping) {
+			log_msg(ENCM_LOG_INFO,
+				"exit while waiting for device initialization");
+			goto out;
+		}
+		log_msg(ENCM_LOG_INFO, "device initialized (id=%s), "
+			"startup continues", device_id_get(&g_app.cfg));
+	}
 
 	/* 5. 基础初始化（顺序对齐 bash：state → 外设 → 恢复默认档 → MQTT） */
 	state_init(&g_app.cfg);

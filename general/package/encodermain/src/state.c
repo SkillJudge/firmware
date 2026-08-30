@@ -179,6 +179,10 @@ static bool flag_file_true(const char *key)
 	return !strcmp(buf, "true") || !strcmp(buf, "1");
 }
 
+
+/* 是不是可以不需要保存这些参数到 runtime 文件，因为每次启动都会从 registerAck 中获取。请你思考以后修改代码，避免重复保存。那么问题是，重启以后，重新register，会丢丢掉之前的录像任务，不能恢复现场。录像文件就失败了。
+然而，我工作环境里的这些 常量参数都是写死的，不需要变更。是不是可以写死，测试环境跟未来的生产环境是一致的*/
+
 /* 启动时从 runtime 文件恢复（断电重启后 FTP/SRS/时间偏移不丢） */
 int rt_load(const enc_cfg_t *c, enc_runtime_t *rt)
 {

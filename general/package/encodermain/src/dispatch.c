@@ -496,6 +496,9 @@ static void handle_register_ack(const char *payload)
 
 	v = jv_path(j, "data");
 	sb_init(&d);
+	sb_putc(&d, '{');   /* 重建 data 对象必须有外层大括号：否则
+			     * jv_parse 会把首字段名解析成字符串且
+			     * 不检查尾部垃圾，静默丢弃 ftp/srs 配置 */
 	if (v) {
 		/* jv_path 仅对 object 生效；字段缺失时自动跳过 */
 		reg_field(&d, v, "code", "code");
@@ -504,6 +507,7 @@ static void handle_register_ack(const char *payload)
 		reg_obj(&d, v, "ftp", "ftp");
 		reg_obj(&d, v, "srs", "srs");
 	}
+	sb_putc(&d, '}');
 	snprintf(data_json, sizeof(data_json), "%s", d.s ? d.s : "");
 	sb_free(&d);
 
