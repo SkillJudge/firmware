@@ -86,7 +86,7 @@ static void cfg_defaults(enc_cfg_t *c)
 	c->mem_avail_min_kb   = 8192;
 	c->charge_window_sec  = 300;
 	c->charge_drop_pct    = 2;
-	c->charge_drop_mv     = 30;
+	c->charge_drop_mv     = 80;        /* 充电尾段实测波动 ~74mV，30 会误报 2001 */
 	c->record_min_free_mb = 5120;      /* 5GB：足够一轮应急录像的底线 */
 
 	/* 进程监控：majestic 固定 pid 文件路径；encoder_main/listener/heartbeat

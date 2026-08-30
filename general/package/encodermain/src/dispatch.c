@@ -92,10 +92,65 @@ static void cache_path(char *dst, size_t sz, const char *dir,
 /* LRU：按 .done mtime 淘汰最旧一组（bash ls -1t | tail 同效果） */
 static void cache_evict(const char *dir, int max_entries);
 
-/* 命中重放：.done 存在即视为重复命令，重放缓存 topic/payload（bash 同语义） */
-static bool cache_replay(const char *dir, const char *key, const char *what)
+/* 对 JSON 片段做数字字段的字符串替换（用于重放 ACK 时修正 msgId/replyTo）。
+ * dst 必须有足够空间；匹配 `"${key}":${old}`（无引号包裹数字），替换成 `"${key}":${new}`。
+ * 找不到就原样拷贝，返回 false；找到至少一处匹配返回 true。 */
+static bool json_replace_i64(char *dst, size_t sz, const char *src,
+			     const char *key, long long new_val)
 {
-	char path[800], topic[256], payload[2048], val[32];
+	char needle[128];
+	snprintf(needle, sizeof(needle), "\"%s\":", key);
+	size_t klen = strlen(needle);
+	size_t si = 0, di = 0;
+	bool hit = false;
+
+	while (src[si] && di + 1 < sz) {
+		if (strncmp(src + si, needle, klen) == 0) {
+			size_t tj = si + klen;
+			/* 读一个整数（可选负号） */
+			long long old_val = 0;
+			bool neg = false;
+			if (src[tj] == '-') { neg = true; tj++; }
+			if (src[tj] < '0' || src[tj] > '9') {
+				/* 不是数字：原样拷 "key":*/
+				if (di + klen >= sz) break;
+				memcpy(dst + di, needle, klen);
+				di += klen; si = si + klen;
+				continue;
+			}
+			while (src[tj] >= '0' && src[tj] <= '9')
+				old_val = old_val * 10 + (src[tj++] - '0');
+			if (neg) old_val = -old_val;
+			(void)old_val;
+			/* 写入新值 */
+			char sub[128];
+			int sl = snprintf(sub, sizeof(sub), "%s%lld", needle, new_val);
+			if (sl > 0 && (size_t)sl < sz - di) {
+				memcpy(dst + di, sub, (size_t)sl);
+				di += (size_t)sl;
+				si = tj;
+				hit = true;
+				continue;
+			}
+			/* 空间不足：原样 */
+			if (di + klen >= sz) break;
+			memcpy(dst + di, needle, klen);
+			di += klen; si = si + klen;
+			continue;
+		}
+		dst[di++] = src[si++];
+	}
+	dst[di] = '\0';
+	return hit;
+}
+
+/* 命中重放：.done 存在即视为重复命令，重放缓存 topic/payload（bash 同语义）。
+ * new_msg_id != 0 时，将 ACK payload 顶层 msgId 与 data.replyTo 更新为新值，
+ * 保证重发端（新 msgId 的那一条请求）能匹配对应 ACK（设计 §6.1 L1/L2 幂等语义）。 */
+static bool cache_replay(const char *dir, const char *key, const char *what,
+			 long long new_msg_id)
+{
+	char path[800], topic[256], payload[2048], new_payload[2048], val[32];
 
 	cache_path(path, sizeof(path), dir, key, ".done");
 	if (!read_str_file(path, val, sizeof(val)))
@@ -110,8 +165,18 @@ static bool cache_replay(const char *dir, const char *key, const char *what)
 
 	log_msg(ENCM_LOG_WARN, "[DISPATCH] duplicate %s replayed key=%s",
 		what, key);
-	if (topic[0] && payload[0])
-		mq_publish(g_app.mq, topic, payload, true);
+	if (topic[0] && payload[0]) {
+		const char *out = payload;
+		if (new_msg_id != 0) {
+			char tmp[2048];
+			json_replace_i64(tmp, sizeof(tmp), payload,
+					 "replyTo", new_msg_id);
+			json_replace_i64(new_payload, sizeof(new_payload),
+					 tmp, "msgId", new_msg_id);
+			out = new_payload;
+		}
+		mq_publish(g_app.mq, topic, out, true);
+	}
 	return true;
 }
 
@@ -182,7 +247,7 @@ static void cache_evict(const char *dir, int max_entries)
 }
 
 /* L2 命中检查。返回 0=未命中；1=命中且已重放；2=executing 等待超时（陈旧） */
-static int dedup_check(const char *dir, const char *key)
+static int dedup_check(const char *dir, const char *key, long long new_msg_id)
 {
 	char path[800], val[32];
 	int i;
@@ -197,7 +262,7 @@ static int dedup_check(const char *dir, const char *key)
 			return 2;
 		sleep(1);
 	}
-	cache_replay(dir, key, "task command");
+	cache_replay(dir, key, "task command", new_msg_id);
 	return 1;
 }
 
@@ -558,7 +623,7 @@ static void worker_handle(const disp_msg_t *m)
 	snprintf(l1raw, sizeof(l1raw), "%s_%s_%s_%s_%lld", cmd.sender,
 		 cmd.sender_sub, cmd.flow, cmd.action, cmd.msg_id);
 	proto_key_sanitize(l1key, sizeof(l1key), l1raw);
-	if (cache_replay(g_dir_cache, l1key, "command"))
+	if (cache_replay(g_dir_cache, l1key, "command", cmd.msg_id))
 		return;
 
 	/* 3. 状态机应答特判（bash 语义，先于 L2） */
@@ -589,7 +654,7 @@ static void worker_handle(const disp_msg_t *m)
 			   sizeof(norm_url))) {
 		char done_path[800];
 
-		switch (dedup_check(g_dir_dedup, l2key)) {
+		switch (dedup_check(g_dir_dedup, l2key, cmd.msg_id)) {
 		case 1:
 			return;         /* 命中已重放，跳过业务 */
 		case 2:

@@ -414,6 +414,7 @@ int upload_publish_segment(mq_client_t *mq, const enc_cfg_t *c,
 		sb_json_str(&d, file_name ? file_name : "");
 		sb_puts(&d, ",\"fileUrl\":");
 		sb_json_str(&d, url);
+		sb_fmt(&d, ",\"fileSize\":%lld", file_size);
 		sb_puts(&d, ",\"status\":\"success\"");
 	}
 	sb_init(&b);

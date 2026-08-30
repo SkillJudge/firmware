@@ -872,7 +872,10 @@ static int record_stop(const enc_cfg_t *c, const char *mode,
 	json_escape(latest, sizeof(latest), report);	/* latest 复用为转义缓冲 */
 	extra_add(r, "\"fileUrl\":%s", latest);
 	extra_add(r, "\"segmentNo\":%ld", seg_no);
-	result_ok(r, 0, !strcmp(mode, "task") ? "success" : "streaming");
+	/* 旧 bash 版 record/stop_record 曾写 status=streaming，但自动化测试对 stop_record 语义
+	 * 期望是 success（stop_record_ack 仅代表"录制已停止+尾片已上传成功"，不应表示对外仍在推流）。
+	 * task/ 与 record/ 两条路径返回一致 status=success；对外是否仍在推流由 heartbeat.is_publishing 体现。 */
+	result_ok(r, 0, "success");
 
 	state_set_str("last_record_id", record_id);
 	state_set_str("last_record_task_id", cur_task);

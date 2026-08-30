@@ -44,6 +44,7 @@
 #define MQ_PKT_PUBACK		0x40
 #define MQ_PKT_PUBREC		0x50
 #define MQ_PKT_PUBREL		0x60
+#define MQ_PKT_PUBREL_TX	0x62	/* 发送侧：规范要求 PUBREL 固定头带 0b0010 */
 #define MQ_PKT_PUBCOMP		0x70
 #define MQ_PKT_SUBSCRIBE	0x82
 #define MQ_PKT_SUBACK		0x90
@@ -218,8 +219,12 @@ static int mq_send_connect(mq_client_t *m)
 	int rc;
 
 	sb_init(&b);
-	/* variable header */
-	sb_puts(&b, "\x00\x04MQTT");
+	/* variable header：协议名长度 0x0004 + "MQTT"
+	 * （不能写成 sb_puts("\x00\x04MQTT")：sb_puts 按 strlen 写入，
+	 *   首字节 0x00 会导致整个字段丢失，broker 报 protocol error） */
+	sb_putc(&b, (char)0x00);
+	sb_putc(&b, (char)0x04);
+	sb_puts(&b, "MQTT");
 	sb_putc(&b, (char)0x04);                    /* protocol level 3.1.1 */
 	flags = 0x02 | (user ? 0x80 : 0) | (pass ? 0x40 : 0);
 	sb_putc(&b, (char)flags);
@@ -577,7 +582,7 @@ static int parse_packets(mq_client_t *m)
 				}
 				pthread_mutex_unlock(&m->mu);
 				put_u16(ab, pid);
-				(void)mq_send_packet(m, MQ_PKT_PUBREL, ab, 2);
+				(void)mq_send_packet(m, MQ_PKT_PUBREL_TX, ab, 2);
 			}
 			break;
 		case MQ_PKT_PUBREL:
@@ -671,6 +676,11 @@ static void mq_session(mq_client_t *m)
 					remlen >= 2 ? m->inbuf[3] : -1);
 				return;     /* broker 拒绝 */
 			}
+			/* 消费 CONNACK：否则残留字节挡住后续 SUBACK 匹配
+			 * （inbuf[0] 仍是 0x20，SUBACK 检查将永远失败） */
+			memmove(m->inbuf, m->inbuf + 2 + remlen,
+				m->in_len - (size_t)(2 + remlen));
+			m->in_len -= (size_t)(2 + remlen);
 			break;
 		}
 	}
@@ -928,18 +938,20 @@ int mq_publish(mq_client_t *m, const char *topic, const char *payload,
 		return -1;
 	}
 	if (inf->qos == 0) {
-		/* QoS0 即发即忘 */
-		if (m->fd >= 0)
+		/* QoS0 即发即忘（发送必须在锁外：mq_send_packet 内部会取 mu） */
+		bool have_fd = m->fd >= 0;
+
+		pthread_mutex_unlock(&m->mu);
+		if (have_fd)
 			rc = mq_send_publish(m, inf) == 0 ? 0 : -1;
 		else
 			rc = -1;
 		free(inf->topic);
 		free(inf->payload);
 		free(inf);
-		pthread_mutex_unlock(&m->mu);
 		return rc;
 	}
-	/* QoS1/2：入链表（发送序） */
+	/* QoS1/2：入链表（发送序）；发送在锁外执行 */
 	{
 		mq_inflight_t **pp = &m->inflight;
 
@@ -947,13 +959,17 @@ int mq_publish(mq_client_t *m, const char *topic, const char *payload,
 			pp = &(*pp)->next;
 		*pp = inf;
 	}
-	if (m->fd >= 0) {
-		if (mq_send_publish(m, inf) != 0)
-			rc = 0;     /* 发送失败留在链表，重连后补发 */
-	} else if (!persist && inf->file[0] == '\0') {
-		rc = 0;             /* 未连接：已入队，重连后补发 */
+	{
+		bool have_fd = m->fd >= 0;
+
+		pthread_mutex_unlock(&m->mu);
+		if (have_fd) {
+			if (mq_send_publish(m, inf) != 0)
+				rc = 0; /* 发送失败留在链表，重连后补发 */
+		} else if (!persist && inf->file[0] == '\0') {
+			rc = 0;         /* 未连接：已入队，重连后补发 */
+		}
 	}
-	pthread_mutex_unlock(&m->mu);
 	return rc;
 }
 
