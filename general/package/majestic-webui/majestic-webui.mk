@@ -24,17 +24,17 @@ define MAJESTIC_WEBUI_INSTALL
 endef
 
 define MAJESTIC_WEBUI_STANDARD_FIXUP
-	rm $(TARGET_DIR)/var/www/cgi-bin/fpv-wfb.cgi
-	rm $(TARGET_DIR)/var/www/cgi-bin/j/locale_fpv.cgi
-	rm $(TARGET_DIR)/var/www/cgi-bin/p/header_fpv.cgi
-	rm $(TARGET_DIR)/var/www/cgi-bin/p/fpv_common.cgi
+	rm -f $(TARGET_DIR)/var/www/cgi-bin/fpv-wfb.cgi
+	rm -f $(TARGET_DIR)/var/www/cgi-bin/j/locale_fpv.cgi
+	rm -f $(TARGET_DIR)/var/www/cgi-bin/p/header_fpv.cgi
+	rm -f $(TARGET_DIR)/var/www/cgi-bin/p/fpv_common.cgi
 endef
 
 define MAJESTIC_WEBUI_FPV_FIXUP
 	mv -f $(TARGET_DIR)/var/www/cgi-bin/j/locale_fpv.cgi $(TARGET_DIR)/var/www/cgi-bin/j/locale.cgi
 	mv -f $(TARGET_DIR)/var/www/cgi-bin/p/header_fpv.cgi $(TARGET_DIR)/var/www/cgi-bin/p/header.cgi
-	rm $(TARGET_DIR)/usr/sbin/telegram
-	rm $(TARGET_DIR)/usr/sbin/openwall
+	rm -f $(TARGET_DIR)/usr/sbin/telegram
+	rm -f $(TARGET_DIR)/usr/sbin/openwall
 endef
 
 define MAJESTIC_WEBUI_INSTALL_TARGET_CMDS
