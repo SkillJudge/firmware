@@ -161,6 +161,13 @@ int main() {
 
             sendto(sock, "SNAP_SUCCESS", 12, 0, (struct sockaddr *)&client_addr, addr_len);
         }
+        else if (strcmp(buffer, "REBOOT") == 0) {
+            // 返回重启确认
+            sendto(sock, "REBOOT_SUCCESS", 14, 0, (struct sockaddr *)&client_addr, addr_len);
+            printf("[REBOOT] Reboot command received, rebooting in 2 seconds\n");
+            // 后台延时 2 秒后重启，给 UDP 回包留出时间
+            system("(sleep 2; reboot) &");
+        }
         else if (strstr(buffer, "FIRMWAREUPDATE=") == buffer)
         {
             const char *ftp_url = buffer + strlen("FIRMWAREUPDATE=");
