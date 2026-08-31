@@ -291,11 +291,20 @@ static void build_stream_url_with_name(const char *url, const char *name,
 	snprintf(out, sz, "%s/%s", base, name);
 }
 
-/* build_stream_url：命令下发 → registerAck/runtime SRS → config.sh 默认兜底 */
+/* build_stream_url：命令下发 → registerAck/runtime SRS → config.sh 默认兜底。
+ * 严格对齐 bash 版 feature_engine.sh build_stream_url：
+ *   registerAck/default fallback 必须用 4 段格式 "rtmp://host:port/<SRS_APP>/<stream_name>"，
+ *   不能把 stream_name 直接挂在 host:port 后，否则 RTMP app 段=SRS_APP（协议固定 "live"）
+ *   缺失，majestic 会把唯一的一段 path 当 app、playpath 为空 → SRS 2051 StreamNameEmpty。
+ * 控制端如果显式下发 data.streamUrl（含多段 path），走 build_stream_url_with_name，
+ * 仍由控制端保证协议正确性，此处不改变语义。 */
 static int build_stream_url(const enc_cfg_t *c, const char *requested,
 			    const enc_runtime_t *rt, char *out, size_t sz)
 {
 	char name[192];
+	const char *scheme_end;
+	const char *path;
+	char  hostonly[256];
 
 	build_stream_name(c, name, sizeof(name));
 	if (requested && requested[0]) {
@@ -303,15 +312,37 @@ static int build_stream_url(const enc_cfg_t *c, const char *requested,
 		return 0;
 	}
 	if (rt && rt->srs_url[0]) {
-		/* rt.srs_url：完整 rtmp URL 或 host[:port] 形态均可 */
-		if (strstr(rt->srs_url, "://"))
-			build_stream_url_with_name(rt->srs_url, name, out, sz);
-		else
+		/* rt.srs_url 有两种形态：
+		 *   (a) registerAck 下发 host/port 后 C 端拼成的 "rtmp://host:port"
+		 *       （path 为空，协议里约定 SRS_APP 本地补 "live"）
+		 *   (b) 控制端下发完整 URL（含 path），例如 "rtmp://host:port/live/xxx"
+		 * 对 (a) 必须显式插入 /SRS_APP_DEFAULT/ 段（用户说的 "加 live"）；
+		 * 对 (b) 继续走 build_stream_url_with_name 替换最后一级为 stream_name。 */
+		if (strstr(rt->srs_url, "://")) {
+			scheme_end = strstr(rt->srs_url, "://");
+			path = strchr(scheme_end + 3, '/');
+			if (!path) {
+				/* 无 path = registerAck 只给了 host:port → 补 /live/<name> */
+				snprintf(out, sz, "%s/%s/%s",
+					 rt->srs_url, SRS_APP_DEFAULT, name);
+			} else if (!path[1]) {
+				/* path 只有一个 "/" = 尾部悬挂斜杠，同样补两段 */
+				snprintf(hostonly, sizeof(hostonly), "%.*s",
+					 (int)(path - rt->srs_url), rt->srs_url);
+				snprintf(out, sz, "%s/%s/%s",
+					 hostonly, SRS_APP_DEFAULT, name);
+			} else {
+				/* path 至少一段 → 按原协议替换最后一级 = stream_name */
+				build_stream_url_with_name(rt->srs_url, name, out, sz);
+			}
+		} else {
+			/* 老形态：纯 host 或 host:port，没有 scheme */
 			snprintf(out, sz, "rtmp://%s/%s/%s", rt->srs_url,
 				 SRS_APP_DEFAULT, name);
+		}
 		return 0;
 	}
-	/* config.sh SRS_HOST/SRS_PORT/SRS_APP 默认值兜底 */
+	/* config.sh SRS_HOST/SRS_PORT/SRS_APP 默认值兜底（bash 对齐 4 段） */
 	snprintf(out, sz, "rtmp://%s:%s/%s/%s", SRS_HOST_DEFAULT,
 		 SRS_PORT_DEFAULT, SRS_APP_DEFAULT, name);
 	return 0;
