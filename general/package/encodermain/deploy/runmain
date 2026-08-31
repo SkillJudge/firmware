@@ -1,0 +1,150 @@
+#!/bin/sh
+# =============================================================
+# runmain — 编码器 SD 卡侧的"用新 encodermain 替代固件 encodermain"
+#
+# 安装位置（deploy.sh 会自动放到这里）：
+#   /mnt/mmcblk0p1/encdeploy/runmain
+# 目录结构：
+#   /mnt/mmcblk0p1/encdeploy/
+#   ├── runmain                 本脚本
+#   ├── encodermain             新编译的可执行
+#   ├── default.encoder         /etc/default/encoder 覆盖版（可选）
+#   ├── S96encodermain          固件自启脚本（参考，不直接用）
+#   ├── config.sh               业务配置覆盖版（可选）
+#   ├── majestic.yaml.patch     可选，若存在则 yaml-cli merge（暂未用）
+#   ├── logs/
+#   │     └── encodermain-$(date).log
+#   └── state/ → 软链到 /root/encoder/runtime/state
+#
+# 功能：
+#   1) 停止固件烧录版 encodermain：
+#        - /etc/init.d/S96encodermain stop
+#        - killall -9 encodermain
+#   2) 如提供新 default.encoder：覆盖 /etc/default/encoder（会备份一份
+#      /etc/default/encoder.bak.<date>）
+#   3) 如提供新 config.sh：备份后覆盖 /root/encoder/config.sh
+#   4) 清空旧运行时 PID / lock，确保下次启动不被门卫拦截；然后
+#      cd /root/encoder/runtime，用 SD 卡的 ./encodermain -b 启动；
+#      stdout/stderr 重定向到 logs/ 下带日期的滚动日志
+#
+# 用法（在编码器上执行，root 登录）：
+#   /mnt/mmcblk0p1/encdeploy/runmain         # 启动（先停旧再启新）
+#   /mnt/mmcblk0p1/encdeploy/runmain stop    # 只停 SD 卡 encodermain，恢复固件版？不，只是停
+#   /mnt/mmcblk0p1/encdeploy/runmain restore # 恢复固件默认 /etc/default/encoder + config.sh + S96encodermain start
+#
+# 注意：sd卡路径不要改动（encodermain 会通过 /proc/self/exe 找到自己但不改路径）。
+# =============================================================
+set -u
+
+ENCDIR="/mnt/mmcblk0p1/encdeploy"
+RUNTIME="/root/encoder/runtime"
+PIDFILE="$RUNTIME/state/pid"
+NEWBIN="$ENCDIR/encodermain"
+NEWDEFAULT="$ENCDIR/default.encoder"
+NEWCONFIG="$ENCDIR/config.sh"
+LOGDIR="$ENCDIR/logs"
+
+if [ ! -d "$ENCDIR" ]; then
+  echo "[runmain] ERROR: ENCDIR=$ENCDIR not found" >&2
+  exit 2
+fi
+if [ ! -x "$NEWBIN" ]; then
+  echo "[runmain] ERROR: $NEWBIN not executable" >&2
+  exit 3
+fi
+
+mkdir -p "$LOGDIR" "$RUNTIME/state" "$RUNTIME/logs"
+
+log_stamp() { date '+%F-%H%M%S'; }
+
+case "${1:-start}" in
+# ---- stop: 停固件 + 停任何 encodermain 进程（不分是谁起的）
+stop)
+  echo "[$(log_stamp)] runmain stop: 停止所有 encodermain 进程 + S96"
+  # 若 S96 存在就走 stop 流程（确保 PIDFILE 清掉）
+  if [ -x /etc/init.d/S96encodermain ]; then /etc/init.d/S96encodermain stop; fi
+  # 兜底 killall：固件版 /usr/sbin/encodermain 和 SD 卡新的 encodermain 同名都得死
+  n=0
+  while pgrep -x encodermain >/dev/null && [ $n -lt 5 ]; do
+    killall -9 encodermain 2>/dev/null || true
+    sleep 1
+    n=$((n+1))
+  done
+  pgrep -x encodermain >/dev/null && echo "WARNING: encodermain 仍存活 (pgrep)"
+  rm -f "$PIDFILE"
+  echo "[$(log_stamp)] runmain stop DONE"
+  ;;
+
+# ---- restore: 把覆盖的配置还原 + 重启固件 S96（不再用 SD 卡版）
+restore)
+  echo "[$(log_stamp)] runmain restore → 恢复固件默认 + S96encodermain start"
+  sh "$0" stop
+  # 恢复 /etc/default/encoder.bak.* 中最新一份（若存在）
+  LATEST=$(ls -1t /etc/default/encoder.bak.* 2>/dev/null | head -1)
+  if [ -n "$LATEST" ]; then
+    cp -a "$LATEST" /etc/default/encoder
+    echo "  restored /etc/default/encoder <- $LATEST"
+  fi
+  LATEST=$(ls -1t /root/encoder/config.sh.bak.* 2>/dev/null | head -1)
+  if [ -n "$LATEST" ]; then
+    cp -a "$LATEST" /root/encoder/config.sh
+    echo "  restored /root/encoder/config.sh <- $LATEST"
+  fi
+  if [ -x /etc/init.d/S96encodermain ]; then /etc/init.d/S96encodermain start; fi
+  ;;
+
+# ---- start: 备份 & 覆盖配置 + 停旧 + 启新
+start|*)
+  STAMP=$(log_stamp)
+  echo "[$STAMP] ============= runmain start  encodermain @ sd card ============= "
+
+  # --- 配置覆盖（幂等：若同一 STAMP 已备份不再备份） ---
+  if [ -f "$NEWDEFAULT" ]; then
+    if [ -f /etc/default/encoder ]; then
+      cp -a /etc/default/encoder "/etc/default/encoder.bak.$STAMP"
+      echo "  backup /etc/default/encoder -> /etc/default/encoder.bak.$STAMP"
+    fi
+    cp -a "$NEWDEFAULT" /etc/default/encoder
+    chmod 644 /etc/default/encoder
+    echo "  overwrite /etc/default/encoder (from deploy)"
+  fi
+  if [ -f "$NEWCONFIG" ]; then
+    if [ -f /root/encoder/config.sh ]; then
+      cp -a /root/encoder/config.sh "/root/encoder/config.sh.bak.$STAMP"
+      echo "  backup /root/encoder/config.sh -> config.sh.bak.$STAMP"
+    fi
+    cp -a "$NEWCONFIG" /root/encoder/config.sh
+    chmod 755 /root/encoder/config.sh
+    echo "  overwrite /root/encoder/config.sh (from deploy)"
+  fi
+
+  # --- 停旧：固件 S96 + 所有 encodermain ---
+  sh "$0" stop
+  rm -f "$RUNTIME/state/lock" "$RUNTIME/state/majestic.lock"
+
+  # --- 启动 SD 卡新 encodermain ---
+  echo "  starting $NEWBIN -b ..."
+  cd "$RUNTIME" || exit 4
+  LOG="$LOGDIR/encodermain-$STAMP.log"
+  # 用 setsid 脱离当前 SSH，否则 SSH 断了进程可能收到 SIGHUP
+  nohup env -i \
+    HOME=/root \
+    PATH=/usr/sbin:/usr/bin:/sbin:/bin \
+    "$NEWBIN" -b \
+    >"$LOG" 2>&1 </dev/null &
+  DISOWN_PID=$!
+  # nohup 在 busybox ash 下不会自动 disown；disown 一下
+  (disown) 2>/dev/null || true
+  sleep 2
+  if [ -f "$PIDFILE" ]; then
+    echo "[$(log_stamp)] OK: SD encodermain running pid=$(cat "$PIDFILE"), log=$LOG"
+  elif kill -0 "$DISOWN_PID" 2>/dev/null; then
+    echo "[$(log_stamp)] OK: SD encodermain pid=$DISOWN_PID (no PIDFILE yet), log=$LOG"
+  else
+    echo "[$(log_stamp)] FAIL: SD encodermain not running after 2s. Last log tail:" >&2
+    tail -40 "$LOG" 2>/dev/null >&2 || echo "(log file empty/missing)" >&2
+    exit 5
+  fi
+  ;;
+esac
+exit 0
