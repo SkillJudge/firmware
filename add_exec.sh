@@ -38,7 +38,6 @@ general/overlay/root/encoder/actions/sd_remount.sh
 general/overlay/root/encoder/actions/record_purge.sh
 general/overlay/root/encoder/actions/stream_hup_majestic.sh
 general/overlay/root/encoder/actions/shutdown_lowbattery.sh
-general/overlay/root/resources/jq
 
 "
 
