@@ -208,14 +208,81 @@ void proto_key_sanitize(char *buf, size_t sz, const char *src)
 	buf[o] = '\0';
 }
 
+/* SRS_APP_DEFAULT 与 feature_media.c build_stream_url 语义保持一致：
+ * 4 段式 scheme://host:port/<app>/<stream_name>；如果控制端下发 URL 缺独立
+ * app 段则强制插入 "live"（修复 2026-09-01 outgoing.server 为空 bug — 单级
+ * path 被 majestic 解析成 app 段后 playpath 空 → SRS 2051 StreamNameEmpty） */
+#define SRS_APP_DEFAULT_PROTO  "live"
+
+/* ensure_srs_app_default_inplace: 与 feature_media.c stream_url_ensure_app_default
+ * 语义完全相同，独立实现（避免跨 .o 符号耦合）。
+ * 2026-09-01 ROUND2 精修：段数>=2 且 首段名 != SRS_APP_DEFAULT_PROTO("live") 时
+ * 仍视为"伪两级缺app"，强制丢弃非末段，host 与末段 name 之间重新插入 live。*/
+static void ensure_srs_app_default_inplace(char *url, size_t sz)
+{
+	const char *scheme_end, *path, *p, *slash;
+	char rebuild[1024];
+	char name_part[256];
+	char first_seg[128];
+	size_t n_seg, host_len, base_len, fs_len;
+
+	if (!url || !url[0] || sz < 16)
+		return;
+	scheme_end = strstr(url, "://");
+	if (!scheme_end)
+		return;
+	path = strchr(scheme_end + 3, '/');
+	if (!path || !path[1])
+		return;
+	n_seg = 0;
+	for (p = path + 1; *p; ) {
+		n_seg++;
+		p = strchr(p, '/');
+		if (!p) break;
+		p++;
+		while (*p == '/') p++;
+		if (!*p) break;
+	}
+	slash = strchr(path + 1, '/');
+	if (slash) {
+		fs_len = (size_t)(slash - (path + 1));
+	} else {
+		fs_len = strlen(path + 1);
+	}
+	if (fs_len >= sizeof(first_seg))
+		fs_len = sizeof(first_seg) - 1;
+	memcpy(first_seg, path + 1, fs_len);
+	first_seg[fs_len] = '\0';
+	if (n_seg >= 2 && fs_len > 0 &&
+	    strcmp(first_seg, SRS_APP_DEFAULT_PROTO) == 0) {
+		return;
+	}
+	host_len = (size_t)(path - url);
+	slash = strrchr(path + 1, '/');
+	if (slash)
+		snprintf(name_part, sizeof(name_part), "%s", slash + 1);
+	else
+		snprintf(name_part, sizeof(name_part), "%s", path + 1);
+	base_len = strlen(name_part);
+	while (base_len > 0 && name_part[base_len - 1] == '/')
+		name_part[--base_len] = '\0';
+	if (!name_part[0])
+		return;
+	snprintf(rebuild, sizeof(rebuild), "%.*s/%s/%s",
+		 (int)host_len, url, SRS_APP_DEFAULT_PROTO, name_part);
+	if (strlen(rebuild) + 1 > sz)
+		return;
+	snprintf(url, sz, "%s", rebuild);
+}
+
 /* bash build_stream_url_with_name：统一替换最后一级为本设备推流名 */
 static bool url_with_stream_name(const char *url, const char *name,
 				 char *out, size_t sz)
 {
 	char base[512];
-	const char *scheme, *q;
+	const char *scheme;
 	size_t l;
-	int slashes = 0;
+	int slashes;
 
 	if (!url || !url[0] || !name || !name[0])
 		return false;
@@ -227,23 +294,50 @@ static bool url_with_stream_name(const char *url, const char *name,
 		return false;
 
 	scheme = strstr(base, "://");
-	q = scheme ? scheme + 3 : base;
-	for (; *q; q++) {
-		if (*q == '/')
-			slashes++;
-	}
-	/* bash 通配 x://a/b/c 形态：仅当带 scheme 且路径 ≥2 级时替换最后一级，
-	 * 否则一律追加（无 scheme 的 URL bash 不匹配替换分支） */
-	if (scheme && slashes >= 2) {
-		char *cut = strrchr(base, '/');
+	/* ROUND2 精修（与 feature_media.c build_stream_url_with_name 对齐）：
+	 * 仅当 scheme 存在 且 path 段数 >=2 且 第一(path)段 == "live" 时才
+	 * 执行"替换最后一级"；其他情况一律 append/<name>，然后交给
+	 * ensure_srs_app_default_inplace 统一插 /live 段。避免"伪两级"
+	 *（段数=2 但首段非 live）漏归一化导致 SRS 2051 StreamNameEmpty。*/
+	if (scheme) {
+		const char *path_start = strchr(scheme + 3, '/');
+		if (path_start && path_start[1]) {
+			const char *q;
+			const char *slash2 = strchr(path_start + 1, '/');
+			size_t s1len;
+			char   seg1[128];
+			int    segs = 1;
 
-		if (cut) {
-			snprintf(out, sz, "%.*s/%s", (int)(cut - base), base,
-				 name);
-			return true;
+			if (slash2)
+				s1len = (size_t)(slash2 - (path_start + 1));
+			else
+				s1len = strlen(path_start + 1);
+			if (s1len >= sizeof(seg1)) s1len = sizeof(seg1) - 1;
+			memcpy(seg1, path_start + 1, s1len);
+			seg1[s1len] = '\0';
+			for (q = path_start + 1; *q; ) {
+				q = strchr(q, '/');
+				if (!q) break;
+				q++;
+				while (*q == '/') q++;
+				if (*q) segs++;
+			}
+			if (segs >= 2 && strcmp(seg1, SRS_APP_DEFAULT_PROTO) == 0) {
+				char *cut = strrchr(base, '/');
+
+				if (cut) {
+					snprintf(out, sz, "%.*s/%s",
+						 (int)(cut - base), base, name);
+					ensure_srs_app_default_inplace(out, sz);
+					return true;
+				}
+			}
+			(void)slashes;
 		}
 	}
+	/* 无 scheme 或 scheme 但段数不够/首段非 live：直接 append 后归一化 */
 	snprintf(out, sz, "%s/%s", base, name);
+	ensure_srs_app_default_inplace(out, sz);
 	return true;
 }
 

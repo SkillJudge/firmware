@@ -89,14 +89,12 @@ static void cfg_defaults(enc_cfg_t *c)
 	c->charge_drop_mv     = 80;        /* 充电尾段实测波动 ~74mV，30 会误报 2001 */
 	c->record_min_free_mb = 5120;      /* 5GB：足够一轮应急录像的底线 */
 
-	/* 进程监控（2026-08-31 起 C 版 encodermain 进固件，bash 家族名移除）：
-	 * majestic 固定 pid 文件路径；encodermain 用 lock.c 单实例 pid
-	 * （state_dir/pid，显式 pidfile 命中后做身份复核防 pid 回收）；
-	 * ipc_server(=factoryinit 服务) 无 pid 文件，走 /proc comm 扫描 */
+	/* 进程监控（2026-09-01 简化）：默认纯名字清单，/proc comm 为权威源
+	 * （条目随进程死亡消失，无陈旧态）；pidfile（显式或 state 目录约定）
+	 * 只是 fast-path，命中后一律做身份复核防 pid 回收（陈旧 pid 曾致
+	 * 6103 误报/漏报） */
 	snprintf(c->monitor_procs, sizeof(c->monitor_procs),
-		 "majestic:/var/run/majestic.pid,"
-		 "encodermain:/root/encoder/runtime/state/pid,"
-		 "ipc_server");
+		 "majestic,encodermain,ipc_server");
 	c->storm_window_sec   = 900;       /* 15min 窗口 */
 	c->storm_max_restarts = 3;         /* 窗口内拉起 ≥3 次升级 reboot */
 	snprintf(c->crash_dir, sizeof(c->crash_dir),

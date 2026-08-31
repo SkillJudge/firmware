@@ -32,9 +32,9 @@ echo "$PROCS" | tr ',' '\n' | while IFS= read -r p; do
             echo "majestic"
             ;;
         encodermain)
-            # C 版主控：清理残留 pid 文件（S96encodermain 的 PIDFILE），
-            # 避免 encalertd 显式 pidfile 探测在启动窗口期旧 pid 再次误判
-            rm -f "$STATE_DIR/pid"
+            # C 版主控：清理残留 pid 文件（main.c 写 state/encodermain.pid），
+            # 单实例裁决已改 comm 扫描，此处仅卫生清理非必需
+            rm -f "$STATE_DIR/encodermain.pid"
             /etc/init.d/S96encodermain start >/dev/null 2>&1
             echo "encodermain"
             ;;

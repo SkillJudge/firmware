@@ -246,6 +246,15 @@ static void cache_evict(const char *dir, int max_entries)
 	}
 }
 
+/* ------------------------------------------------------------------ */
+/* L2 bizid 派生                                                        */
+/* ------------------------------------------------------------------ */
+
+/* 返回 false = 无 bizid，跳过 L2。norm_url 接收规范化后的推流 URL。
+ * 前置声明：dedup_remove_pair 需要调用；定义在 L308 下方。 */
+static bool task_dedup_key(const cmd_t *cmd, proto_cmd_t cc, char *key,
+			   size_t sz, char *norm_url, size_t nsz);
+
 /* L2 命中检查。返回 0=未命中；1=命中且已重放；2=executing 等待超时（陈旧） */
 static int dedup_check(const char *dir, const char *key, long long new_msg_id)
 {
@@ -264,6 +273,124 @@ static int dedup_check(const char *dir, const char *key, long long new_msg_id)
 	}
 	cache_replay(dir, key, "task command", new_msg_id);
 	return 1;
+}
+
+/* L2 dedup 删除：某 key 同组 4 个文件全部 unlink（.done/.topic/.payload/.executing 场景遗留）。
+ * 典型用途: stop 成功后删除对应 start 的 L2 key，否则"停流→重新开始"会被
+ * duplicate replayed 永久丢弃（start key = 归一化URL 是固定值），表现为
+ * "encoder_test 点开始推流，ACK 不报错但 outgoing.server 一直空"。
+ * 返回: 实际成功 unlink 的 .done 文件数 (0=目标 key 不存在或全删失败)。 */
+static int dedup_remove_key(const char *dir, const char *key)
+{
+	char path[800];
+	int  removed = 0;
+
+	if (!dir || !dir[0] || !key || !key[0])
+		return 0;
+	cache_path(path, sizeof(path), dir, key, ".done");
+	if (unlink(path) == 0) removed++;
+	cache_path(path, sizeof(path), dir, key, ".topic");
+	unlink(path);
+	cache_path(path, sizeof(path), dir, key, ".payload");
+	unlink(path);
+	return removed;
+}
+
+/* 根据"当前 stop/reset cmd (cur_cc) + 配对 start proto_cmd (pair_cc)"生成
+ * 并删除 pair 的 L2 key。ROUND7 r7：**重写前缀映射不再走 proto_cmd_name**，
+ * 因为 proto_cmd_name(STREAM_START)="stream_start" 但 task_dedup_key L360
+ * 实际拼的是 `<cmd->flow=stream>_<cmd->action=start_stream>_<bizid>` = 前缀
+ * "stream_start_stream"（多一段 stream），导致 r6 "removed_done=0"。
+ * 故此处为每对 pair_cc 独立查表给出 flow_seg + action_seg，再按
+ * task_dedup_key 的 "%s_%s_%s" 规则生 raw，经 sanitize 后逐字对齐。*/
+static void dedup_remove_pair(proto_cmd_t cur_cc, const cmd_t *cmd, proto_cmd_t pair_cc)
+{
+	char key[512];
+	char raw[512];
+	const char *biz = NULL;
+	const char *flow_seg = NULL;
+	const char *action_seg = NULL;
+
+	memset(key, 0, sizeof(key));
+	memset(raw, 0, sizeof(raw));
+
+	switch (pair_cc) {
+	case ENCM_CMD_STREAM_START:
+		flow_seg = "stream";   action_seg = "start_stream";
+		break;
+	case ENCM_CMD_STREAM_STOP:
+		flow_seg = "stream";   action_seg = "stop_stream";
+		break;
+	case ENCM_CMD_RECORD_START:
+		flow_seg = "record";   action_seg = "start_record";
+		biz = cmd->record_id;
+		break;
+	case ENCM_CMD_RECORD_STOP:
+		flow_seg = "record";   action_seg = "stop_record";
+		biz = cmd->record_id;
+		break;
+	case ENCM_CMD_TASK_STREAM_START:
+		flow_seg = "task";     action_seg = "start_stream";
+		biz = cmd->task_id;
+		break;
+	case ENCM_CMD_TASK_RECORD_START:
+		flow_seg = "task";     action_seg = "start_record";
+		biz = cmd->task_id;
+		break;
+	case ENCM_CMD_TASK_RECORD_STOP:
+		flow_seg = "task";     action_seg = "stop_record";
+		biz = cmd->task_id;
+		break;
+	case ENCM_CMD_TASK_PREPARE_DESK_VOICE:
+		flow_seg = "task";
+		action_seg = "prepare_desk_recognition_voice";
+		biz = cmd->task_id;
+		break;
+	case ENCM_CMD_TASK_RESET:
+		flow_seg = "task";     action_seg = "reset";
+		biz = cmd->task_id;
+		break;
+	default:
+		return;
+	}
+
+	/* STREAM_*：biz = cmd->stream_url 空 → 归一化 rt.srs_url */
+	if ((pair_cc == ENCM_CMD_STREAM_START ||
+	     pair_cc == ENCM_CMD_STREAM_STOP) && !biz) {
+		char fb[300];
+		char norm_url[512];
+		const char *fbp = NULL;
+
+		pthread_mutex_lock(&g_app.rt_mutex);
+		snprintf(fb, sizeof(fb), "%s", g_app.rt.srs_url);
+		pthread_mutex_unlock(&g_app.rt_mutex);
+		if (fb[0])
+			fbp = fb;
+		memset(norm_url, 0, sizeof(norm_url));
+		if (proto_stream_url_normalize(cmd->stream_url, fbp,
+					       cmd->device_id, norm_url,
+					       sizeof(norm_url)))
+			biz = norm_url;
+	}
+
+	if (!flow_seg || !action_seg || !biz || !biz[0]) {
+		log_msg(ENCM_LOG_INFO,
+			"[DEDUP] remove_pair skip cur=%s pair=%s flow=%s act=%s biz=%s",
+			proto_cmd_name(cur_cc), proto_cmd_name(pair_cc),
+			flow_seg ? flow_seg : "?", action_seg ? action_seg : "?",
+			biz ? biz : "");
+		return;
+	}
+	/* 逐字对齐 task_dedup_key L412: raw="<flow>_<action>_<biz>" */
+	snprintf(raw, sizeof(raw), "%s_%s_%s", flow_seg, action_seg, biz);
+	proto_key_sanitize(key, sizeof(key), raw);
+	{
+		int n = dedup_remove_key(g_dir_dedup, key);
+		log_msg(ENCM_LOG_INFO,
+			"[DEDUP] remove_pair cur=%s pair=%s key=%s removed_done=%d",
+			proto_cmd_name(cur_cc), proto_cmd_name(pair_cc),
+			key, n);
+	}
 }
 
 /* ------------------------------------------------------------------ */
@@ -660,6 +787,37 @@ static void worker_handle(const disp_msg_t *m)
 
 		switch (dedup_check(g_dir_dedup, l2key, cmd.msg_id)) {
 		case 1:
+			/* ROUND3 推流 Bug 修复（L2 命中时仍需语义清 START key）：
+			 * 若本命令是 STOP/RESET，即使 duplicate，也要删配对
+			 * START key。否则: 停流→重推 全链路:
+			 *   pre-clean stop 写 L2 → T1 start 写 START L2 → T1→T2
+			 *   stop(幂等) 走此处 duplicate return → START key 从未删
+			 *   → T2 start = bizid=归一化 URL 同 T1 → START duplicate
+			 *     discard → media: 不执行 → outgoing.server 永远空。
+			 * 删 START key 不影响 stop 本身的幂等回放 (下方已有 L1 cache
+			 * 回放 ACK 发布; stop 的 L2 key 仍然保留，后续 stop 继续幂等)。 */
+			switch (cc) {
+			case ENCM_CMD_STREAM_STOP:
+				dedup_remove_pair(cc, &cmd, ENCM_CMD_STREAM_START);
+				break;
+			case ENCM_CMD_RECORD_STOP:
+				dedup_remove_pair(cc, &cmd, ENCM_CMD_RECORD_START);
+				break;
+			case ENCM_CMD_TASK_RECORD_STOP:
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_TASK_RECORD_START);
+				break;
+			case ENCM_CMD_TASK_RESET:
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_TASK_STREAM_START);
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_TASK_RECORD_START);
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_TASK_PREPARE_DESK_VOICE);
+				break;
+			default:
+				break;
+			}
 			return;         /* 命中已重放，跳过业务 */
 		case 2:
 			log_msg(ENCM_LOG_WARN,
@@ -677,6 +835,49 @@ static void worker_handle(const disp_msg_t *m)
 
 	/* 5. 执行业务（feature_media.c 实现；内部自带 Majestic 锁） */
 	feat_execute(&cmd, &r);
+
+	/* 5b. ROUND3 推流 Bug 修复：stop/reset 成功(或幂等)后删除对应 start L2 dedup key。
+	 * 若不删：STREAM_START 的 L2 key = 归一化 URL（固定 live/stream_<id>）
+	 * 会永久留在 task_dedup/ 中，下次"停流→重推"会被 duplicate replayed 丢弃，
+	 * 没有进入 media_start → outgoing.server 一直空但 ACK 不报错（用户投诉现象）。
+	 * r.code=0 / status=idle/stopped/duplicate 均视为"配对 start key 该失效"。 */
+	{
+		int ok = (r.code == 0) ||
+			 (strcmp(r.status, "idle") == 0) ||
+			 (strcmp(r.status, "stopped") == 0) ||
+			 (strcmp(r.status, "duplicate") == 0) ||
+			 (strcmp(r.status, "ok") == 0);
+
+		if (ok) {
+			switch (cc) {
+			case ENCM_CMD_STREAM_STOP:
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_STREAM_START);
+				break;
+			case ENCM_CMD_RECORD_STOP:
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_RECORD_START);
+				break;
+			case ENCM_CMD_TASK_RECORD_STOP:
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_TASK_RECORD_START);
+				break;
+			case ENCM_CMD_TASK_RESET:
+				/* reset = 所有 task 类 key 失效 */
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_TASK_STREAM_START);
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_TASK_RECORD_START);
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_TASK_PREPARE_DESK_VOICE);
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_TASK_RECORD_STOP);
+				break;
+			default:
+				break;
+			}
+		}
+	}
 
 	/* 6. 组 ACK → 先写 L1/L2 缓存 → persist 发布 */
 	{

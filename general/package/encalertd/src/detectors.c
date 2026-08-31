@@ -537,14 +537,11 @@ static const char *det_proc_down(const enc_cfg_t *c,
 				snprintf(p, sizeof(p), "%s/%s.pid",
 					 c->state_dir, name);
 			if (read_int_file(p, &pid) && pid > 1 &&
-			    kill((pid_t)pid, 0) == 0) {
-				/* 显式 pidfile 可能由外部维护：pid 回收复用时
-				 * kill 探测会误判存活，需做身份复核；
-				 * state 目录 pid 由 claim_pidfile 维护，免复核 */
-				alive = pidfile[0] ? pid_matches(pid, name,
-								 cmdpat)
-						   : true;
-			}
+			    kill((pid_t)pid, 0) == 0)
+				/* kill(pid,0) 只证明 pid 位被占用；pidfile 可能
+				 * 陈旧/pid 被回收复用给无关进程，一律身份复核，
+				 * 复核不过回落 comm/cmdline 探测（堵假存活漏报） */
+				alive = pid_matches(pid, name, cmdpat);
 		}
 		/* 2) comm 精确匹配（C 二进制进程） */
 		if (!alive)

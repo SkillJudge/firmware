@@ -14,6 +14,7 @@
  *   --purge [hours] 只删已上传超龄录像（对齐 encalertd record_purge.sh）
  */
 #define _GNU_SOURCE
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -54,22 +55,47 @@ static void pidfile_path(char *out, size_t sz)
 	snprintf(out, sz, "%s/encodermain.pid", g_app.cfg.state_dir);
 }
 
+/* comm 扫描查重（排除自身）：/proc 条目随进程死亡自动消失，无陈旧态。
+ * pidfile 内容一律不参与存活判定——陈旧 pid + init 确定性 pid 回收复用
+ * 曾致 kill(pid,0) 探到自己 → 开机自启必退 → 6103 连报（2026-08-31 根治） */
+static bool already_running(void)
+{
+	DIR *d;
+	struct dirent *e;
+	bool found = false;
+
+	d = opendir("/proc");
+	if (!d)
+		return false;
+	while ((e = readdir(d)) != NULL) {
+		char p[48], comm[64];
+
+		if (e->d_name[0] < '0' || e->d_name[0] > '9')
+			continue;
+		if (atoi(e->d_name) == getpid())
+			continue;
+		snprintf(p, sizeof(p), "/proc/%s/comm", e->d_name);
+		if (read_str_file(p, comm, sizeof(comm)) &&
+		    !strcmp(comm, "encodermain")) {
+			found = true;
+			break;
+		}
+	}
+	closedir(d);
+	return found;
+}
+
 static int single_instance_lock(void)
 {
 	char path[300];
-	char buf[32];
-	long pid = 0;
 	FILE *fp;
 
-	pidfile_path(path, sizeof(path));
-	if (read_str_file(path, buf, sizeof(buf)) && buf[0]) {
-		pid = strtol(buf, NULL, 10);
-		if (pid > 0 && pid_alive(pid)) {
-			log_msg(ENCM_LOG_ERROR,
-				"another encodermain running pid=%ld", pid);
-			return -1;
-		}
+	if (already_running()) {
+		log_msg(ENCM_LOG_ERROR, "another encodermain running");
+		return -1;
 	}
+	/* pidfile 仅为控制面句柄（S96 stop / 运维查看），不参与判定 */
+	pidfile_path(path, sizeof(path));
 	fp = fopen(path, "w");
 	if (!fp)
 		return -1;
@@ -411,6 +437,10 @@ int main(int argc, char **argv)
 stopped_early:
 	/* 10. 清理（bash exit_handler 同语义：恢复默认档 → 退出） */
 	log_msg(ENCM_LOG_INFO, "shutting down");
+	/* 关机硬上限：worker join/disconnect 卡死曾致进程残留数分钟，
+	 * 占住 comm 名使后续启动被单实例拒绝（killall SIGTERM 也杀不动）。
+	 * 正常关机 ~3s，10s 足够；到点 SIGALRM 默认终止进程由内核回收 */
+	alarm(10);
 	dispatch_shutdown();
 	if (heartbeat_started)
 		pthread_join(heartbeat_tid, NULL);

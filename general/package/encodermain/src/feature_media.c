@@ -267,7 +267,88 @@ static void build_stream_name(const enc_cfg_t *c, char *out, size_t sz)
 	snprintf(out, sz, "stream_%s", device_id_get(c));
 }
 
-/* build_stream_url_with_name：控制端下发 URL 统一替换最后一级为 stream_name */
+/* build_stream_url_with_name：控制端下发 URL 统一替换最后一级为 stream_name；
+ * 之后强制走一次"path 级次归一化 + SRS_APP_DEFAULT 注入"：
+ *   - 约定最终必须是 4 段式 scheme://host:port/<app>/<stream_name>；
+ *   - 最终 app 段必须严格相等 SRS_APP_DEFAULT("live")；段数≥2 但首段≠"live"
+ *     时，同样视为"伪两级缺app"（典型 case：T1 控制端只下发
+ *     rtmp://host:1935/stream_XXX → build_stream_url_with_name 尾部补同名成
+ *     stream_XXX/stream_XXX，段数=2但首段非live → majestic 仍把 stream_XXX
+ *     解析为 RTMP app → SRS 端注册 app=live → 2051 StreamNameEmpty /
+ *     outgoing.server 看似写了实际为空(失效)）；
+ *   - 非 live 的多段 path 取末段重当 stream name，其余段丢弃，host 与 name
+ *     之间强制插入 SRS_APP_DEFAULT("live")，保证最终落盘严格 4 段式。
+ * 设计 §6.2 / protocol 修复记录：2026-09-01 ROUND2（"outgoing server为空、
+ *   ACK不报错"bug 精修 —— ROUND1 只看段数导致伪两级漏归一化。）。 */
+static void stream_url_ensure_app_default(char *url, size_t sz)
+{
+	const char *scheme_end;
+	const char *path;
+	char rebuild[1024];
+	size_t n_seg;
+	const char *p;
+	const char *slash;
+	char name_part[256];
+	char first_seg[128];
+	size_t host_part_len;
+	size_t base_len;
+	size_t fs_len;
+
+	if (!url || !url[0] || sz < 16)
+		return;
+	scheme_end = strstr(url, "://");
+	if (!scheme_end)
+		return;
+	path = strchr(scheme_end + 3, '/');
+	if (!path || !path[1])
+		return;
+	/* 段数统计（a/b → 两段，对应 1 个非末尾 '/') */
+	n_seg = 0;
+	for (p = path + 1; *p; ) {
+		n_seg++;
+		p = strchr(p, '/');
+		if (!p) break;
+		p++;
+		while (*p == '/') p++;
+		if (!*p) break;
+	}
+	/* 取第一段（候选 app 段）：从 path+1 到下一个 '/' 或末尾 */
+	slash = strchr(path + 1, '/');
+	if (slash) {
+		fs_len = (size_t)(slash - (path + 1));
+	} else {
+		fs_len = strlen(path + 1);
+	}
+	if (fs_len >= sizeof(first_seg))
+		fs_len = sizeof(first_seg) - 1;
+	memcpy(first_seg, path + 1, fs_len);
+	first_seg[fs_len] = '\0';
+	/* 满足：段数>=2 且 第一段==SRS_APP_DEFAULT → 已是合法 4 段式，不动 */
+	if (n_seg >= 2 && fs_len > 0 &&
+	    strcmp(first_seg, SRS_APP_DEFAULT) == 0) {
+		return;
+	}
+	/* 其余情况：末段重作为 stream_name，host 与 name 之间强制插 /live/ */
+	host_part_len = (size_t)(path - url);
+	/* 末段 = strrchr(path+1, '/') 之后；如果只有一段（无第二个'/')，那就 path+1 */
+	slash = strrchr(path + 1, '/');
+	if (slash) {
+		snprintf(name_part, sizeof(name_part), "%s", slash + 1);
+	} else {
+		snprintf(name_part, sizeof(name_part), "%s", path + 1);
+	}
+	base_len = strlen(name_part);
+	while (base_len > 0 && name_part[base_len - 1] == '/')
+		name_part[--base_len] = '\0';
+	if (!name_part[0])
+		return;
+	snprintf(rebuild, sizeof(rebuild), "%.*s/%s/%s",
+		 (int)host_part_len, url, SRS_APP_DEFAULT, name_part);
+	if (strlen(rebuild) + 1 > sz)
+		return;
+	snprintf(url, sz, "%s", rebuild);
+}
+
 static void build_stream_url_with_name(const char *url, const char *name,
 				       char *out, size_t sz)
 {
@@ -279,16 +360,61 @@ static void build_stream_url_with_name(const char *url, const char *name,
 	l = strlen(base);
 	while (l > 0 && base[l - 1] == '/')
 		base[--l] = '\0';
-	/* bash case 匹配 scheme://host/a/b 形态：路径有两级以上才替换
-	 * 最后一级，否则直接追加。注意注释内不得出现星号斜杠序列。 */
+	/* ROUND2 精修：仅当 scheme 后存在 ≥2 段 path 且首段=SRS_APP_DEFAULT 时
+	 * 才"替换最后一级"；否则一律 append/<name>，再让
+	 * stream_url_ensure_app_default 统一做"非 live 首段强制插 live"。
+	 * 原因：build_stream_url(requested=单级path) 时，老逻辑"只要有1个'/'
+	 * 就替换最后一级"仍可能产出 stream_XXX/stream_XXX 的伪两级，majestic
+	 * 把首段当 RTMP app、SRS 只认 live=app → outgoing 失效为空。*/
 	scheme = strstr(base, "://");
-	p = scheme ? strchr(scheme + 3, '/') : strchr(base, '/');
-	if (p && strchr(p + 1, '/')) {
-		char *last = strrchr(p, '/');
+	if (scheme) {
+		const char *pp;
+		const char *path_start;
+		const char *next_slash;
+		size_t seg1_len;
+		int    path_segments;
+		char   seg1_buf[128];
 
-		*last = '\0';
+		path_start = strchr(scheme + 3, '/');
+		if (path_start && path_start[1]) {
+			next_slash = strchr(path_start + 1, '/');
+			if (next_slash)
+				seg1_len = (size_t)(next_slash - (path_start + 1));
+			else
+				seg1_len = strlen(path_start + 1);
+			if (seg1_len >= sizeof(seg1_buf))
+				seg1_len = sizeof(seg1_buf) - 1;
+			memcpy(seg1_buf, path_start + 1, seg1_len);
+			seg1_buf[seg1_len] = '\0';
+			path_segments = 1;
+			for (pp = path_start + 1; *pp; ) {
+				pp = strchr(pp, '/');
+				if (!pp) break;
+				pp++;
+				while (*pp == '/') pp++;
+				if (*pp) path_segments++;
+			}
+			if (path_segments >= 2 &&
+			    strcmp(seg1_buf, SRS_APP_DEFAULT) == 0) {
+				char *last = strrchr(base, '/');
+
+				if (last)
+					*last = '\0';
+			}
+		}
+	} else {
+		/* 无 scheme: 保持 legacy —— 含 '/' 就替换末段 */
+		p = strchr(base, '/');
+		if (p && strchr(p + 1, '/')) {
+			char *last = strrchr(base, '/');
+
+			if (last)
+				*last = '\0';
+		}
 	}
 	snprintf(out, sz, "%s/%s", base, name);
+	/* ROUND2 最终统一归一化（段数不够或首段非 live 都强制插/live） */
+	stream_url_ensure_app_default(out, sz);
 }
 
 /* build_stream_url：命令下发 → registerAck/runtime SRS → config.sh 默认兜底。
