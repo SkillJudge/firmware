@@ -33,6 +33,8 @@ static void cfg_set(enc_cfg_t *c, const char *k, const char *v)
 	else if (!strcmp(k, "enable_sysres"))      c->enable_sysres = cfg_bool(v);
 	else if (!strcmp(k, "enable_process"))     c->enable_process = cfg_bool(v);
 	else if (!strcmp(k, "enable_stream"))      c->enable_stream = cfg_bool(v);
+	else if (!strcmp(k, "enable_hw"))          c->enable_hw = cfg_bool(v);
+	else if (!strcmp(k, "hw_interval_sec"))    c->hw_interval_sec = atoi(v);
 	else if (!strcmp(k, "mqtt_host"))   snprintf(c->mqtt_host, sizeof(c->mqtt_host), "%s", v);
 	else if (!strcmp(k, "mqtt_port"))          c->mqtt_port = atoi(v);
 	else if (!strcmp(k, "mqtt_user"))   snprintf(c->mqtt_user, sizeof(c->mqtt_user), "%s", v);
@@ -69,7 +71,9 @@ static void cfg_defaults(enc_cfg_t *c)
 	snprintf(c->actions_dir, sizeof(c->actions_dir), ENC_ACTIONS_DIR_DEFAULT);
 	c->action_timeout_sec = 30;
 	c->enable_wifi = c->enable_battery = c->enable_sdcard =
-	    c->enable_sysres = c->enable_process = c->enable_stream = true;
+	    c->enable_sysres = c->enable_process = c->enable_stream =
+	    c->enable_hw = true;
+	c->hw_interval_sec   = 3600;       /* 硬件自检 1h/次；稳定后可调 86400 */
 
 	/* MQTT 地址/凭据：默认空，由 config.sh 继承或环境变量/conf 提供。
 	 * 全部为空时报警只落 spool 不发送（保证不硬编码任何凭据）。 */

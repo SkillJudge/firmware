@@ -145,13 +145,31 @@ static const char *record_root(const enc_cfg_t *c)
 /* yaml-cli + HUP（全部持 majestic 文件锁调用）                          */
 /* ------------------------------------------------------------------ */
 
-/* common.sh feature_yaml_set：yaml-cli -i <conf> -s <key> <value>；
- * 字符串值先 shell_quote（feature_cli_set_string），bool/number 原样 */
+/* yaml-cli 路径规范（v0.0.4 板侧实测 2026-09-01）：
+ *   key 必须以 '.' 开头（.outgoing.server / .video0.enabled / .records.enabled …）；
+ *   缺失 '.' 的 "outgoing.server" 会把 key 解析失败退化成追加重复节点：
+ *     RC=1、val=[]、后续每次 set 都新加一行同级 server: → majestic 首条 empty
+ *     胜出 → 推流永远不建立 outgoing（SRS no_established_to_1935）。
+ *   dot-key 正确行为：set RC=0 就地覆盖、get RC=0 拿值、-d RC=0 物理删除、
+ *   set "" RC=0 把值清空。
+ * 本 helper 统一在 yaml_set/yaml_del 入口 dot_ensure()，对调用端省略 dot 的
+ * 30+ 处老调用透明兼容；显式带 '.' 的 key（如 L1339 ".records.enabled"）原样。 */
+static void dot_ensure(char *dst, size_t dsz, const char *key)
+{
+	size_t o = 0;
+	if (!dst || dsz < 2) return;
+	if (!key || !key[0]) { dst[0] = '\0'; return; }
+	if (key[0] != '.') dst[o++] = '.';
+	for (; key[0] && o + 1 < dsz; key++) dst[o++] = *key;
+	dst[o] = '\0';
+}
+
 static int yaml_set(const enc_cfg_t *c, const char *key,
 		    const char *value, bool quote)
 {
-	char qc[600], qv[1100], cmd[1900];
+	char qc[600], qv[1100], cmd[1900], dk[160];
 
+	dot_ensure(dk, sizeof(dk), key);
 	shell_quote(qc, sizeof(qc),
 		    c->majestic_conf[0] ? c->majestic_conf : ENCM_MAJESTIC_CONF);
 	if (quote)
@@ -159,11 +177,64 @@ static int yaml_set(const enc_cfg_t *c, const char *key,
 	else
 		snprintf(qv, sizeof(qv), "%s", value);
 	snprintf(cmd, sizeof(cmd), "%s -i %s -s %s %s",
-		 c->yaml_cli[0] ? c->yaml_cli : ENCM_YAML_CLI, qc, key, qv);
+		 c->yaml_cli[0] ? c->yaml_cli : ENCM_YAML_CLI, qc, dk, qv);
 	if (run_cmd(cmd, 10, NULL, 0) != 0) {
-		log_msg(ENCM_LOG_ERROR, "media: yaml set failed key=%s", key);
+		log_msg(ENCM_LOG_ERROR, "media: yaml set failed key=%s dk=%s",
+			key, dk);
 		return -1;
 	}
+	return 0;
+}
+
+/* yaml_del：yaml-cli -i <conf> -d <dot-key>，物理删除 key 行（RC=0 成功）。
+ * 用于 STOP 清空 outgoing.server：比 "-s '' 留空 server:" 更干净，
+ * 避免 majestic 某些构建把空字符串理解成"沿用上次"。
+ * ⚠ yaml-cli v0.0.4 quirk：当 key 已值空 (  server: 无右值) ，-d 返回 RC=1
+ *   非 0（非 bug，"空 key 不能删除"）；调用方须在调用前用 yaml_get_* 判断
+ *   是否有非空值，必要时退化到 -s '' 空串清零或直接跳过。 */
+static int yaml_del(const enc_cfg_t *c, const char *key)
+{
+	char qc[600], cmd[1900], dk[160];
+
+	dot_ensure(dk, sizeof(dk), key);
+	shell_quote(qc, sizeof(qc),
+		    c->majestic_conf[0] ? c->majestic_conf : ENCM_MAJESTIC_CONF);
+	snprintf(cmd, sizeof(cmd), "%s -i %s -d %s",
+		 c->yaml_cli[0] ? c->yaml_cli : ENCM_YAML_CLI, qc, dk);
+	if (run_cmd(cmd, 10, NULL, 0) != 0) {
+		log_msg(ENCM_LOG_ERROR, "media: yaml del failed key=%s dk=%s",
+			key, dk);
+		return -1;
+	}
+	return 0;
+}
+
+/* yaml_get：读回 key 字符串值。返回 0=读成功 (即使空字符串也算) ；-1=get
+ * 异常 (yaml-cli rc!=0 / 路径错)。dst 可空。yaml-cli v0.0.4 quirk：
+ *   -g .outgoing.server → 值空返回 RC=0 且 stdout=空；key 不存在可能 RC=1 */
+static int yaml_get(const enc_cfg_t *c, const char *key, char *dst, size_t dsz)
+{
+	char qc[600], cmd[1900], dk[160], out[512];
+	int  rc;
+
+	if (dst && dsz) dst[0] = '\0';
+	dot_ensure(dk, sizeof(dk), key);
+	shell_quote(qc, sizeof(qc),
+		    c->majestic_conf[0] ? c->majestic_conf : ENCM_MAJESTIC_CONF);
+	snprintf(cmd, sizeof(cmd), "%s -i %s -g %s",
+		 c->yaml_cli[0] ? c->yaml_cli : ENCM_YAML_CLI, qc, dk);
+	out[0] = '\0';
+	rc = run_cmd(cmd, 10, out, sizeof(out));
+	if (rc != 0) {
+		log_msg(ENCM_LOG_INFO,
+			"media: yaml get miss key=%s dk=%s rc=%d",
+			key, dk, rc);
+		return -1;
+	}
+	/* 去尾 \n\r */
+	size_t l = strlen(out);
+	while (l && (out[l-1]=='\n' || out[l-1]=='\r')) out[--l]='\0';
+	if (dst && dsz) snprintf(dst, dsz, "%s", out);
 	return 0;
 }
 
@@ -180,7 +251,39 @@ static int majestic_recover(const enc_cfg_t *c)
 	return (rc == 0 && proc_running("majestic")) ? 0 : -1;
 }
 
-/* common.sh stream_service_reload_or_recover：HUP；进程不在/退出则恢复启动 */
+/* S95majestic restart: 用于 records.enabled / OSD / video0.enabled 等
+ * Majestic 已知"仅 HUP 不重新评估配置"的字段变更场景。
+ * - 先 stop（不管是否运行），再 start + settle wait，
+ * - 重启失败走 majestic_recover 兜底一次；
+ * - 最终 majestic 进程存在才判成功。
+ * 2026-09-01 R7 修复：record_start verification 100% 超时（10s 内无 mp4）
+ * 根因 = records.enabled=true 下发后 SIGHUP 未加载（同 OSD 问题），
+ * 必须 restart 才能使 majestic 真正开写 /mnt/mmcblk0p1/%F/【mp4】。 */
+static int majestic_restart(const enc_cfg_t *c)
+{
+	const char *init = c->majestic_init[0] ? c->majestic_init : ENCM_MAJESTIC_INIT;
+	char       cmd[256];
+
+	snprintf(cmd, sizeof(cmd), "%s stop", init);
+	run_cmd(cmd, 10, NULL, 0);
+	sleep(STREAM_STOP_SETTLE_SEC);
+
+	snprintf(cmd, sizeof(cmd), "rm -f %s; %s start", MAJESTIC_PID_FILE, init);
+	if (run_cmd(cmd, 15, NULL, 0) != 0 || !proc_running("majestic")) {
+		log_msg(ENCM_LOG_WARN, "media: majestic restart S95 start failed, fallback recover");
+		if (majestic_recover(c) != 0) {
+			log_msg(ENCM_LOG_ERROR, "media: majestic restart+recover both failed");
+			return -1;
+		}
+	}
+	sleep(STREAM_START_SETTLE_SEC);
+	return proc_running("majestic") ? 0 : -1;
+}
+
+/* common.sh stream_service_reload_or_recover：HUP；进程不在/退出则恢复启动。
+ * 仅用于 outgoing.server / bitrate 等 Majestic 文档里确认 SIGHUP 生效的字段。
+ * records.enabled / video0.enabled / OSD 等需要全量评估配置的字段，
+ * 必须调用 majestic_restart()，不要误用 stream_reload() —— 2026-09-01 R7。 */
 static int stream_reload(const enc_cfg_t *c)
 {
 	if (!proc_running("majestic"))
@@ -196,14 +299,14 @@ static int stream_reload(const enc_cfg_t *c)
 /* feature_media_apply_video_profile：主/子码流 profile（bitrate 留空跳过） */
 static int apply_video_profile(const enc_cfg_t *c)
 {
-	if (yaml_set(c, ".video0.enabled", MAIN_STREAM_ENABLED, false) ||
-	    yaml_set(c, ".video0.codec", MAIN_STREAM_CODEC, true) ||
-	    yaml_set(c, ".video0.size", MAIN_STREAM_SIZE, true) ||
-	    yaml_set(c, ".video0.fps", MAIN_STREAM_FPS, false) ||
-	    yaml_set(c, ".video1.enabled", SUB_STREAM_ENABLED, false) ||
-	    yaml_set(c, ".video1.codec", SUB_STREAM_CODEC, true) ||
-	    yaml_set(c, ".video1.size", SUB_STREAM_SIZE, true) ||
-	    yaml_set(c, ".video1.fps", SUB_STREAM_FPS, false))
+	if (yaml_set(c, "video0.enabled", MAIN_STREAM_ENABLED, false) ||
+	    yaml_set(c, "video0.codec", MAIN_STREAM_CODEC, true) ||
+	    yaml_set(c, "video0.size", MAIN_STREAM_SIZE, true) ||
+	    yaml_set(c, "video0.fps", MAIN_STREAM_FPS, false) ||
+	    yaml_set(c, "video1.enabled", SUB_STREAM_ENABLED, false) ||
+	    yaml_set(c, "video1.codec", SUB_STREAM_CODEC, true) ||
+	    yaml_set(c, "video1.size", SUB_STREAM_SIZE, true) ||
+	    yaml_set(c, "video1.fps", SUB_STREAM_FPS, false))
 		return -1;
 	return 0;
 }
@@ -216,45 +319,76 @@ static int apply_record_profile(const enc_cfg_t *c)
 	snprintf(path, sizeof(path), "%s/%%F", record_root(c));
 	snprintf(split, sizeof(split), "%d", RECORD_SPLIT_MINUTES);
 	snprintf(usage, sizeof(usage), "%d", RECORD_MAX_USAGE_PCT);
-	if (yaml_set(c, ".records.path", path, true) ||
-	    yaml_set(c, ".records.split", split, false) ||
-	    yaml_set(c, ".records.maxUsage", usage, false) ||
-	    yaml_set(c, ".records.substream", RECORD_SUBSTREAM_DEF, false))
+	if (yaml_set(c, "records.path", path, true) ||
+	    yaml_set(c, "records.split", split, false) ||
+	    yaml_set(c, "records.maxUsage", usage, false) ||
+	    yaml_set(c, "records.substream", RECORD_SUBSTREAM_DEF, false))
 		return -1;
 	return 0;
 }
 
 static int record_enable(const enc_cfg_t *c)
 {
-	return yaml_set(c, ".records.enabled", "true", false);
+	return yaml_set(c, "records.enabled", "true", false);
 }
 
 static int record_disable(const enc_cfg_t *c)
 {
-	return yaml_set(c, ".records.enabled", "false", false);
+	return yaml_set(c, "records.enabled", "false", false);
 }
 
 /* feature_stream_apply_outgoing_profile */
 static int apply_outgoing_enable(const enc_cfg_t *c, const char *url)
 {
-	return yaml_set(c, ".outgoing.server", url, true) ||
-	       yaml_set(c, ".outgoing.substream", STREAM_SUBSTREAM_DEF, false) ||
-	       yaml_set(c, ".outgoing.enabled", "true", false);
+	return yaml_set(c, "outgoing.server", url, true) ||
+	       yaml_set(c, "outgoing.substream", STREAM_SUBSTREAM_DEF, false) ||
+	       yaml_set(c, "outgoing.enabled", "true", false);
 }
 
-/* feature_stream_disable_outgoing：server 必须清空防旧地址残留 */
+/* feature_stream_disable_outgoing：server 必须清空防旧地址残留。
+ * yaml-cli v0.0.4 quirk:
+ *   - key 存在且**非空**时 `-d` → RC=0（物理删除）；
+ *   - key 存在但**值空** (`server:` 无右值) 时 `-d` → RC=1 不删除
+ *     （这不是错误而是 yaml-cli 语义：空值 key 不支持 delete）；
+ *   - 对 RC=1 退化 case 再做一次 `-s ''` 清零保底或直接 SKIP（值空 = 已清理）。
+ * 最终只在 substream/enabled 两项真正 write 失败时 return -1，server 清理退化成
+ * INFO 日志——否则 5b `r.code != 0` 会让 STOP 跳过 dedup_remove_pair，下一轮 START
+ * 必定 duplicate replay (Bug A 连锁)。 */
 static int apply_outgoing_disable(const enc_cfg_t *c)
 {
-	return yaml_set(c, ".outgoing.server", "", true) ||
-	       yaml_set(c, ".outgoing.substream", STREAM_SUBSTREAM_DEF, false) ||
-	       yaml_set(c, ".outgoing.enabled", "false", false);
+	char cur[512];
+	int  rc;
+
+	cur[0] = '\0';
+	rc = yaml_get(c, "outgoing.server", cur, sizeof(cur));
+	/* 三种"已经干净"的状态：get miss(-1)=key 不存在；或 get ok 但 cur="" 。
+	 * 这两种情况下 del 都必然 rc=1（yaml-cli quirk），直接跳过省 WARN。 */
+	if (rc == 0 && cur[0]) {
+		if (yaml_del(c, "outgoing.server") != 0) {
+			/* del 失败（少见）降级：-s '' 覆盖写空值 */
+			log_msg(ENCM_LOG_WARN,
+				"media: outgoing.server del fallback -> set empty");
+			yaml_set(c, "outgoing.server", "", true);
+		}
+	} else {
+		log_msg(ENCM_LOG_INFO,
+			"media: outgoing.server already clean (get_rc=%d val_len=%zu)",
+			rc, strlen(cur));
+	}
+	if (yaml_set(c, "outgoing.substream", STREAM_SUBSTREAM_DEF, false) != 0 ||
+	    yaml_set(c, "outgoing.enabled", "false", false) != 0) {
+		log_msg(ENCM_LOG_ERROR,
+			"media: outgoing disable: substream/enabled set failed");
+		return -1;
+	}
+	return 0;
 }
 
 /* feature_media_disable_all_video：仅 stopStream/reset 关闭视频链路 */
 static int disable_all_video(const enc_cfg_t *c)
 {
-	return yaml_set(c, ".video0.enabled", "false", false) ||
-	       yaml_set(c, ".video1.enabled", "false", false);
+	return yaml_set(c, "video0.enabled", "false", false) ||
+	       yaml_set(c, "video1.enabled", "false", false);
 }
 
 /* ------------------------------------------------------------------ */
@@ -525,7 +659,68 @@ static bool mp4_suffix(const char *name)
 }
 
 /* bash list_record_files（find+sort）+ feature_find_latest_record_file：
- * mtime ≥ min_ts 的最新 mp4；同 mtime 取文件名排序靠后者 */
+ * 尽量用 YYYY-MM-DD/HH-MM-cam0.mp4 目录+文件名解析出来的 epoch 判定
+ * "最新"（VFAT mtime 因 TZ 挂载缺省可能偏差 13h+，会把旧目录的假新日期抬到
+ *  真实分片之前，导致 walk_latest 永远取 stat mtime 假大值的老文件 → 新分片
+ *  永远无法在 wait_for_new_record_file 中命中 path≠prev 条件（SMOKE7-9
+ *  3 台 encoder verification 100% 超时的第三层根因）。
+ * 解析失败才回退 stat mtime；宽容 min_ts：按 TS_VFAT_TZ_SLACK=13h；
+ * 最终比较：若两者 ts 差 ≤ 1h（认为同一 1min split 窗口内），取 path 字典序大
+ * 的（=HH-MM-cam0.mp4 后一分钟）；否则取 ts 大的。 */
+#define FAT_TZ_SLACK_SEC  (13 * 3600)
+
+/* 解析 /path/YYYY-MM-DD/HH-MM-cam0.mp4 → epoch（board localtime）；失败返回 0 */
+static long long epoch_from_record_path(const char *p)
+{
+	const char *slash1, *slash2, *dash, *dash2, *dash3;
+	char       *endp;
+	long long   y, mo, d, h, mi;
+	struct tm   tm;
+	time_t      t;
+
+	if (!p || !*p)
+		return 0;
+	slash1 = strrchr(p, '/');	/* /HH-MM-cam0.mp4 前 slash */
+	if (!slash1)
+		return 0;
+	dash = strchr(slash1 + 1, '-');	/* HH '-' MM */
+	if (!dash || dash - (slash1 + 1) != 2)
+		return 0;
+	dash2 = strchr(dash + 1, '-');	/* MM '-' cam... */
+	if (!dash2 || dash2 - (dash + 1) != 2)
+		return 0;
+	/* YYYY-MM-DD 前一个 slash2: 从 slash1-1 往回找 '/' */
+	slash2 = NULL;
+	{
+		const char *s;
+		for (s = slash1 - 1; s >= p; s--) {
+			if (*s == '/') { slash2 = s; break; }
+		}
+	}
+	if (!slash2 || slash1 - slash2 != 11 /* /YYYY-MM-DD (10) + / */)
+		return 0;
+	dash3 = strchr(slash2 + 1, '-');	/* YYYY '-' MM */
+	if (!dash3 || dash3 - (slash2 + 1) != 4)
+		return 0;
+	y  = strtoll(slash2 + 1, &endp, 10); if (endp != dash3) return 0;
+	mo = strtoll(dash3 + 1, &endp, 10);   if (endp != dash3 + 4) return 0;
+	d  = strtoll(dash3 + 4, &endp, 10);   if (endp != slash1) return 0;
+	h  = strtoll(slash1 + 1, &endp, 10);  if (endp != dash) return 0;
+	mi = strtoll(dash + 1, &endp, 10);    if (endp != dash2) return 0;
+	if (y < 1970 || y > 2100 || mo < 1 || mo > 12 || d < 1 || d > 31
+	    || h < 0 || h > 23 || mi < 0 || mi > 59)
+		return 0;
+	memset(&tm, 0, sizeof(tm));
+	tm.tm_year = (int)y - 1900;
+	tm.tm_mon  = (int)mo - 1;
+	tm.tm_mday = (int)d;
+	tm.tm_hour = (int)h;
+	tm.tm_min  = (int)mi;
+	tm.tm_isdst = -1;
+	t = mktime(&tm);
+	return (t == (time_t)-1) ? 0 : (long long)t;
+}
+
 static void walk_latest(const char *dir, long long min_ts,
 			char *best, size_t sz, long long *best_ts, int depth)
 {
@@ -537,6 +732,7 @@ static void walk_latest(const char *dir, long long min_ts,
 	while ((e = readdir(d)) != NULL) {
 		char       path[1024];
 		struct stat st;
+		long long  stat_ts, name_ts, ts;
 
 		if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, ".."))
 			continue;
@@ -549,12 +745,19 @@ static void walk_latest(const char *dir, long long min_ts,
 		}
 		if (!S_ISREG(st.st_mode) || !mp4_suffix(e->d_name))
 			continue;
-		if ((long long)st.st_mtime < min_ts)
+		stat_ts = (long long)st.st_mtime;
+		name_ts = epoch_from_record_path(path);
+		/* ts strategy: 文件名解析成功 → 只用 name_ts；VFAT 会把 6-16
+		 * 真实文件的 stat_ts 写回成 8-30 等小日期的假象，或 9-1 老
+		 * 目录的旧文件 stat_ts 被 VFAT 假 UTC-8 写成未来 1788 亿
+		 * epoch 而始终压过真实新分片。name_ts 来自 board
+		 * date → majestic sprintf("%F/%H-%M") → 无 VFAT 翻译。 */
+		ts = name_ts ? name_ts : stat_ts;
+		if (ts < min_ts - FAT_TZ_SLACK_SEC)
 			continue;
-		if ((long long)st.st_mtime > *best_ts ||
-		    ((long long)st.st_mtime == *best_ts &&
-		     (best[0] == '\0' || strcmp(path, best) > 0))) {
-			*best_ts = (long long)st.st_mtime;
+		if (best[0] == '\0' || ts > *best_ts ||
+		    (ts == *best_ts && strcmp(path, best) > 0)) {
+			*best_ts = ts;
 			snprintf(best, sz, "%s", path);
 		}
 	}
@@ -567,8 +770,19 @@ static int wait_for_new_record_file(const enc_cfg_t *c, time_t min_ts,
 				    char *out, size_t sz)
 {
 	char root[512];
-	int  timeout = c->record_verify_timeout_sec > 0 ?
-		       c->record_verify_timeout_sec : 10;
+	/* 2026-09-01 R9: 无论 cfg 是否硬编码了 record_verify_timeout_sec=10，
+	 * 录制首片验证基线固定 ≥ 45s：
+	 *   - majestic_restart() = S95 stop + start + majestic settle
+	 *     + video pipeline rebind ISP/sensor/mpp 保守 15~25s
+	 *   - mp4 moov+mdat 首帧实际落盘(vfat flush) 2~8s
+	 *   - 1Gbps SD 最坏情况 缓冲刷入延迟 ~5s
+	 * 实际 cfg 可能通过 default.conf 覆盖为 10s（旧经验值 SIGHUP 场景），
+	 * 此函数无条件基线 45s，避免 encodermain.conf 误配/历史值覆盖产生
+	 * verification 100% 超时（SMOKE7-9 复现）。 */
+	int  baseline = 45;
+	int  timeout  = c->record_verify_timeout_sec;
+	if (timeout < baseline)
+		timeout = baseline;
 	int  waited = 0;
 
 	snprintf(root, sizeof(root), "%s", record_root(c));
@@ -828,18 +1042,25 @@ static int record_start(const enc_cfg_t *c, const char *mode, const cmd_t *cmd,
 	}
 
 	if (apply_video_profile(c) == 0 && apply_record_profile(c) == 0 &&
-	    record_enable(c) == 0 && stream_reload(c) == 0) {
-		/* bash：首个新 mp4 验证在 Majestic 锁内进行（最多 10s） */
+	    record_enable(c) == 0 && majestic_restart(c) == 0) {
+		/* bash：首个新 mp4 验证在 Majestic 锁内进行（最多 10s）
+		 * 注意：2026-09-01 R7 后此处必须使用 majestic_restart()（S95 stop+
+		 * start）。Majestic 的 records.enabled / video0.enabled / OSD 三
+		 * 类字段仅 SIGHUP 不会重新评估（类似 OSD 已证实的已知问题），
+		 * stream_reload（HUP）会导致 wait_for_new_record_file 100%
+		 * 超时退出、整条录像链路无法创建 mp4/FTP 分片。 */
 		if (wait_for_new_record_file(c, (time_t)start_ts, prev_file,
 					     prev_size, verified,
 					     sizeof(verified)) != 0) {
+			/* R9: 打印 verification timeout=实际使用的 45+s（基线固定），
+			 * 不是 cfg 里的默认 10s。 */
+			int vt = c->record_verify_timeout_sec < 45
+				? 45 : c->record_verify_timeout_sec;
 			log_msg(ENCM_LOG_ERROR,
 				"media: record start verification failed record_id=%s timeout=%ds",
-				cmd->record_id,
-				c->record_verify_timeout_sec > 0 ?
-					c->record_verify_timeout_sec : 10);
+				cmd->record_id, vt);
 			record_disable(c);
-			stream_reload(c);
+			majestic_restart(c);
 			majestic_lock_release();
 			result_ok(r, -1, "fail");
 			return -1;
@@ -955,7 +1176,7 @@ static int record_stop(const enc_cfg_t *c, const char *mode,
 		result_ok(r, -1, "fail");
 		return -1;
 	}
-	if (record_disable(c) != 0 || stream_reload(c) != 0) {
+	if (record_disable(c) != 0 || majestic_restart(c) != 0) {
 		majestic_lock_release();
 		result_ok(r, -1, "fail");
 		log_msg(ENCM_LOG_ERROR,
@@ -1218,24 +1439,45 @@ int feat_restore_startup_media(const enc_cfg_t *c)
 	}
 	/* 顺序照 bash：record profile → outgoing profile → video profile → reload */
 	if (yaml_set(c, ".records.enabled", "false", false) ||
-	    yaml_set(c, ".records.path", STARTUP_RECORDS_PATH, true) ||
-	    yaml_set(c, ".records.split", STARTUP_RECORDS_SPLIT, false) ||
-	    yaml_set(c, ".records.maxUsage", STARTUP_RECORDS_MAXUSAGE, false))
+	    yaml_set(c, "records.path", STARTUP_RECORDS_PATH, true) ||
+	    yaml_set(c, "records.split", STARTUP_RECORDS_SPLIT, false) ||
+	    yaml_set(c, "records.maxUsage", STARTUP_RECORDS_MAXUSAGE, false))
 		rc = -1;
-	if (yaml_set(c, ".outgoing.server", "", true) ||
-	    yaml_set(c, ".outgoing.substream", STREAM_SUBSTREAM_DEF, false) ||
-	    yaml_set(c, ".outgoing.enabled", "true", false))
-		rc = -1;
-	if (yaml_set(c, ".video0.enabled", "true", false) ||
-	    yaml_set(c, ".video0.codec", MAIN_STREAM_CODEC, true) ||
-	    yaml_set(c, ".video0.size", MAIN_STREAM_SIZE, true) ||
-	    yaml_set(c, ".video0.fps", STARTUP_VIDEO0_FPS, false) ||
-	    yaml_set(c, ".video0.bitrate", STARTUP_VIDEO0_BITRATE, false) ||
-	    yaml_set(c, ".video1.enabled", "true", false) ||
-	    yaml_set(c, ".video1.codec", SUB_STREAM_CODEC, true) ||
-	    yaml_set(c, ".video1.size", STARTUP_VIDEO1_SIZE, true) ||
-	    yaml_set(c, ".video1.fps", STARTUP_VIDEO1_FPS, false) ||
-	    yaml_set(c, ".video1.bitrate", STARTUP_VIDEO1_BITRATE, false))
+	{
+		/* 启动恢复：outgoing.server = 不应该有残留。与 STOP 同语义处理：
+		 * 只有 get 得到非空值才真正 del；空值/get miss 都 INFO 跳过，
+		 * 避免 yaml-cli 空值 delete RC=1 被误判 fail。 */
+		char cur_srv[512];
+		int  gr = yaml_get(c, "outgoing.server", cur_srv,
+				   sizeof(cur_srv));
+		int  del_ok = 0;
+		if (gr == 0 && cur_srv[0]) {
+			if (yaml_del(c, "outgoing.server") == 0) {
+				del_ok = 1;
+			} else {
+				log_msg(ENCM_LOG_WARN,
+					"media: startup outgoing.server del fail -> set empty fallback");
+				yaml_set(c, "outgoing.server", "", true);
+				del_ok = 1;   /* 退化也算已处理 */
+			}
+		} else {
+			del_ok = 1;    /* 已经空/不存在，无需处理 */
+		}
+		if (!del_ok ||
+		    yaml_set(c, "outgoing.substream", STREAM_SUBSTREAM_DEF, false) ||
+		    yaml_set(c, ".outgoing.enabled", "true", false))
+			rc = -1;
+	}
+	if (yaml_set(c, "video0.enabled", "true", false) ||
+	    yaml_set(c, "video0.codec", MAIN_STREAM_CODEC, true) ||
+	    yaml_set(c, "video0.size", MAIN_STREAM_SIZE, true) ||
+	    yaml_set(c, "video0.fps", STARTUP_VIDEO0_FPS, false) ||
+	    yaml_set(c, "video0.bitrate", STARTUP_VIDEO0_BITRATE, false) ||
+	    yaml_set(c, "video1.enabled", "true", false) ||
+	    yaml_set(c, "video1.codec", SUB_STREAM_CODEC, true) ||
+	    yaml_set(c, "video1.size", STARTUP_VIDEO1_SIZE, true) ||
+	    yaml_set(c, "video1.fps", STARTUP_VIDEO1_FPS, false) ||
+	    yaml_set(c, "video1.bitrate", STARTUP_VIDEO1_BITRATE, false))
 		rc = -1;
 	if (stream_reload(c) != 0)
 		rc = -1;

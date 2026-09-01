@@ -374,11 +374,57 @@ static void dedup_remove_pair(proto_cmd_t cur_cc, const cmd_t *cmd, proto_cmd_t 
 	}
 
 	if (!flow_seg || !action_seg || !biz || !biz[0]) {
-		log_msg(ENCM_LOG_INFO,
-			"[DEDUP] remove_pair skip cur=%s pair=%s flow=%s act=%s biz=%s",
-			proto_cmd_name(cur_cc), proto_cmd_name(pair_cc),
-			flow_seg ? flow_seg : "?", action_seg ? action_seg : "?",
-			biz ? biz : "");
+		/* ROUND8 Bug A 修复：rt.srs_url 为空（尚未收 registerAck）或 STOP
+		 * 命令缺 stream_url 导致 biz=NULL 时，不能直接 return；否则 START.done
+		 * 永久留在 task_dedup/，下次 START 必 duplicate。
+		 * fallback：按 "<flow>_<action>_"（完整段边界后缀 '_'）作为 key 前缀
+		 * 扫 task_dedup/*.done 强制 unlink。误杀概率≈0：每个 pair_cc 的
+		 * flow+action 组合唯一，段尾 '_' 防止 stream_start_stream_* (TASK)
+		 * 被 stream_start_* (STREAM_START 的 flow=stream+action=start_stream
+		 * 前缀 sanitize 后是 "stream_start_stream_"——末尾 '_' 锁边界)。
+		 * 注意 proto_key_sanitize 只删前导 './_'，尾 '_' 保留。 */
+		if (flow_seg && action_seg && g_dir_dedup[0]) {
+			char prefix[256], expect[256];
+			DIR  *d;
+			struct dirent *e;
+			int    swept = 0;
+
+			snprintf(prefix, sizeof(prefix), "%s_%s_",
+				 flow_seg, action_seg);
+			proto_key_sanitize(expect, sizeof(expect), prefix);
+			d = opendir(g_dir_dedup);
+			if (d) {
+				while ((e = readdir(d)) != NULL) {
+					size_t l = strlen(e->d_name);
+					char   subkey[512];
+
+					if (l < 6 || strcmp(e->d_name + l - 5,
+							    ".done") != 0)
+						continue;
+					if (strncmp(e->d_name, expect,
+						    strlen(expect)) != 0)
+						continue;
+					/* 去掉 .done 拿 subkey */
+					snprintf(subkey, sizeof(subkey),
+						 "%.*s", (int)(l - 5),
+						 e->d_name);
+					swept += dedup_remove_key(g_dir_dedup,
+								  subkey);
+				}
+				closedir(d);
+			}
+			log_msg(ENCM_LOG_WARN,
+				"[DEDUP] remove_pair fallback sweep cur=%s pair=%s prefix=%s removed=%d (biz empty)",
+				proto_cmd_name(cur_cc), proto_cmd_name(pair_cc),
+				expect, swept);
+		} else {
+			log_msg(ENCM_LOG_INFO,
+				"[DEDUP] remove_pair skip cur=%s pair=%s flow=%s act=%s biz=%s",
+				proto_cmd_name(cur_cc), proto_cmd_name(pair_cc),
+				flow_seg ? flow_seg : "?",
+				action_seg ? action_seg : "?",
+				biz ? biz : "");
+		}
 		return;
 	}
 	/* 逐字对齐 task_dedup_key L412: raw="<flow>_<action>_<biz>" */

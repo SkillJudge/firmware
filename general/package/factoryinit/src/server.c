@@ -172,16 +172,64 @@ int main() {
         {
             const char *ftp_url = buffer + strlen("FIRMWAREUPDATE=");
             char cmd[512];
-            
+
             // 拼接后台执行命令
             // 1. 显式调用 /bin/sh 执行脚本
             // 2. 末尾加上 & 让其进入系统后台运行，绝不阻塞主循环
             snprintf(cmd, sizeof(cmd), "/bin/sh /usr/bin/ftp_upgrade \"%s\" &", ftp_url);
 
             printf("[UPDATE] Triggered background upgrade: %s\n", cmd);
-            
+
             // 执行后立刻返回，主程序不会被卡死
             system(cmd);
+        }
+        else if (strcmp(buffer, "HWTEST") == 0)
+        {
+            // 硬件全量自检（产线人工模式）：后台跑 /usr/sbin/hw_probe.sh --manual，
+            // LED 扫描 + 板载语音播放需人工看/听；报告落 /tmp/hwtest_report.txt。
+            // 异步执行（全量含人工项约 30-40s），结果用 HWTESTSTATUS 查询。
+            char cmd[256];
+
+            if (access("/tmp/hwtest_running", F_OK) == 0) {
+                sendto(sock, "HWTEST_BUSY", 11, 0,
+                       (struct sockaddr *)&client_addr, addr_len);
+                printf("[HWTEST] busy, previous test still running\n");
+            } else {
+                unlink("/tmp/hwtest_report.txt");
+                FILE *f = fopen("/tmp/hwtest_running", "w");
+                if (f) fclose(f);
+                snprintf(cmd, sizeof(cmd),
+                         "( /usr/sbin/hw_probe.sh --manual > /tmp/hwtest_report.txt 2>&1; rm -f /tmp/hwtest_running ) &");
+                system(cmd);
+                sendto(sock, "HWTEST_STARTED", 14, 0,
+                       (struct sockaddr *)&client_addr, addr_len);
+                printf("[HWTEST] started in background\n");
+            }
+        }
+        else if (strcmp(buffer, "HWTESTSTATUS") == 0)
+        {
+            if (access("/tmp/hwtest_running", F_OK) == 0) {
+                sendto(sock, "HWTEST_RUNNING", 14, 0,
+                       (struct sockaddr *)&client_addr, addr_len);
+            } else {
+                FILE *f = fopen("/tmp/hwtest_report.txt", "r");
+                if (!f) {
+                    sendto(sock, "HWTEST_NOREPORT", 15, 0,
+                           (struct sockaddr *)&client_addr, addr_len);
+                } else {
+                    // 全文回传（UDP 单报文，产线局域网 ~2KB 无分片问题）
+                    char rep[4096];
+                    size_t n = fread(rep, 1, sizeof(rep) - 1, f);
+                    fclose(f);
+                    rep[n] = '\0';
+                    if (n == 0)
+                        sendto(sock, "HWTEST_NOREPORT", 15, 0,
+                               (struct sockaddr *)&client_addr, addr_len);
+                    else
+                        sendto(sock, rep, n, 0,
+                               (struct sockaddr *)&client_addr, addr_len);
+                }
+            }
         }
     }
     close(sock);

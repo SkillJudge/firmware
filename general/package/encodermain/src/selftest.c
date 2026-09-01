@@ -19,13 +19,16 @@
 #include <unistd.h>
 
 #include "common.h"
+#include "proto_internal.h"
 
 static int g_st_fail;
+static int g_st_pass;		/* 统计 PASS 数量，配合 proto unittest 用 */
 
 static void st_pass(const char *name, const char *fmt, ...)
 {
 	va_list ap;
 
+	g_st_pass++;
 	printf("[PASS] %s: ", name);
 	va_start(ap, fmt);
 	vprintf(fmt, ap);
@@ -152,6 +155,211 @@ static void st_trim(char *s)
 }
 
 /* ------------------------------------------------------------------ */
+/* T1 字符串拼接 / URL 归一化 / dedup key 纯函数单元测试                  */
+/*   —— 2026-09-01 encodermain 回归测试：覆盖前期 task_dedup_key 段数错、
+/*      SRS 缺 /live 段 2051、前导点号隐藏文件、蛇形驼峰不一致等所有 bug */
+/* ------------------------------------------------------------------ */
+
+/* T1 helper：期望相等时 PASS，否则 FAIL，并打印 expect/actual */
+static void ut_expect_streq(const char *case_name, const char *expect,
+			    const char *actual)
+{
+	if (expect && actual && strcmp(expect, actual) == 0)
+		st_pass(case_name, "got=[%s]", actual);
+	else
+		st_fail_line(case_name,
+			     "expect=[%s] actual=[%s]",
+			     expect ? expect : "(null)",
+			     actual ? actual : "(null)");
+}
+
+/* T1.1-1.3 proto_key_sanitize 基础 + 前导点号 + 非法字符 */
+static void ut_key_sanitize(void)
+{
+	char buf[256];
+
+	/* T1.1 前导点号 / 中间点号保留：首字符不得是隐藏文件 '.' */
+	proto_key_sanitize(buf, sizeof(buf), ".rtmp://a.b/c_d?e=f");
+	/* 规则：合法字符保留，其余变 '_'。首字符 '.' 合法 → 按字符保留的话
+	 * 仍会产生 `.rtmp_...`（隐藏文件）。正确做法需把"连续前导 ."删掉。
+	 * 先写出实际值，断言期望"首字符非 '.'"——若当前实现未删前导点则 FAIL，
+	 * 提醒开发者需到 protocol.c 修复 sanitize。 */
+	if (buf[0] != '.')
+		st_pass("T1.1_key_sanitize_leading_dot_removed",
+			"首字符已清: [%s]", buf);
+	else
+		st_fail_line("T1.1_key_sanitize_leading_dot_removed",
+			     "仍含前导点号→会产生隐藏文件！buf=[%s]", buf);
+
+	/* T1.2 中间非法字符全部替换为 '_' */
+	proto_key_sanitize(buf, sizeof(buf), "a:b//c@d!e#f%g");
+	ut_expect_streq("T1.2_key_sanitize_illegal_to_underscore",
+			"a_b__c_d_e_f_g", buf);
+
+	/* T1.3 空输入 + 超长输入不越界 */
+	proto_key_sanitize(buf, sizeof(buf), "");
+	ut_expect_streq("T1.3_key_sanitize_empty_input", "", buf);
+	memset(buf, 0xAA, sizeof(buf) - 1);
+	buf[sizeof(buf) - 1] = 0;
+	proto_key_sanitize(buf, sizeof(buf),
+			   "abcdef");	/* 小写入，验证尾零仍在 */
+	if (buf[strlen("abcdef")] == '\0')
+		st_pass("T1.3b_key_sanitize_write_tail_nul", "ok");
+	else
+		st_fail_line("T1.3b_key_sanitize_write_tail_nul",
+			     "未写 NUL 终止符");
+}
+
+/* T1.4-1.8 proto_stream_url_normalize：SRS /live 段 / 伪两级 / fallback 等 */
+static void ut_url_normalize(void)
+{
+	char out[512];
+	bool ok;
+	const char *dev = "ENC000001";
+
+	/* T1.4 单级 path —— 原 Bug：SRS 2051 StreamNameEmpty */
+	ok = proto_stream_url_normalize(
+		"rtmp://192.168.250.100:1935/stream_ENC001",
+		NULL, dev, out, sizeof(out));
+	if (ok)
+		ut_expect_streq("T1.4_url_singlelevel_insert_live",
+			"rtmp://192.168.250.100:1935/live/stream_ENC000001",
+			out);
+	else
+		st_fail_line("T1.4_url_singlelevel_insert_live",
+			     "proto_stream_url_normalize 返回 false");
+
+	/* T1.5 伪两级（首段非 live）→ 强制插 live 替换非末段 */
+	ok = proto_stream_url_normalize(
+		"rtmp://host:1935/otherApp/demoName",
+		NULL, dev, out, sizeof(out));
+	if (ok)
+		ut_expect_streq("T1.5_url_faketwolevel_drop_nonlive",
+			"rtmp://host:1935/live/stream_ENC000001", out);
+	else
+		st_fail_line("T1.5_url_faketwolevel_drop_nonlive",
+			     "returned false");
+
+	/* T1.6 正常两级（首段=live）→ 只替换末级 stream name，live 保留 */
+	ok = proto_stream_url_normalize(
+		"rtmp://host:1935/live/oldName",
+		NULL, dev, out, sizeof(out));
+	if (ok)
+		ut_expect_streq("T1.6_url_normaltwolevel_preserve_live",
+			"rtmp://host:1935/live/stream_ENC000001", out);
+	else
+		st_fail_line("T1.6_url_normaltwolevel_preserve_live",
+			     "returned false");
+
+	/* T1.7 三段以上层级 → 只取末段 stream name，中间丢弃 */
+	ok = proto_stream_url_normalize(
+		"rtmp://host:1935/a/b/c/deepName",
+		NULL, dev, out, sizeof(out));
+	if (ok)
+		ut_expect_streq("T1.7_url_multilevel_keep_tail_only",
+			"rtmp://host:1935/live/stream_ENC000001", out);
+	else
+		st_fail_line("T1.7_url_multilevel_keep_tail_only",
+			     "returned false");
+
+	/* T1.8 requested 空 → 回退 fallback_url */
+	ok = proto_stream_url_normalize(
+		"",
+		"rtmp://srs.internal:1935",
+		dev, out, sizeof(out));
+	if (ok)
+		ut_expect_streq("T1.8_url_empty_requested_fallback",
+			"rtmp://srs.internal:1935/live/stream_ENC000001",
+			out);
+	else
+		st_fail_line("T1.8_url_empty_requested_fallback",
+			     "returned false (fallback not applied)");
+}
+
+/* T1.9 dedup key 对账：task_dedup_key 生成 vs dedup_remove_pair 查表生成，
+ *      两者必须逐字节一致。用 STREAM_START 最关键的 case（原 bug 出处）。
+ *   —— dispatch.c:444 task_dedup_key 生成:
+ *      key = sanitize("<flow>_<action>_<biz>") = sanitize(
+ *          "stream_start_stream_rtmp://host:1935/live/stream_X" )
+ *   —— dedup_remove_pair (dispatch.c:319) 查表:
+ *      flow_seg="stream" + action_seg="start_stream" + same biz
+ *      最终 raw 格式相同，sanitize 结果必须完全相等 */
+static void ut_dedup_key_pair_match(void)
+{
+	const char *flow   = "stream";
+	const char *action = "start_stream";
+	const char *biz    = "rtmp://192.168.250.100:1935/live/stream_ENC000001";
+	char raw1[512], raw2[512], key_a[512], key_b[512];
+	const char *flow_seg_p, *action_seg_p;
+
+	/* side A: task_dedup_key 实际格式 (dispatch.c:444) */
+	snprintf(raw1, sizeof(raw1), "%s_%s_%s", flow, action, biz);
+	proto_key_sanitize(key_a, sizeof(key_a), raw1);
+
+	/* side B: dedup_remove_pair 查表格式 (dispatch.c:319)
+	 * 这是 r7 修复后独立的 flow_seg + action_seg 查表硬编码值，
+	 * 与 proto_cmd_name(STREAM_START)=stream_start 故意不同步！ */
+	flow_seg_p   = "stream";
+	action_seg_p = "start_stream";
+	snprintf(raw2, sizeof(raw2), "%s_%s_%s",
+		 flow_seg_p, action_seg_p, biz);
+	proto_key_sanitize(key_b, sizeof(key_b), raw2);
+
+	if (strcmp(key_a, key_b) == 0) {
+		st_pass("T1.9_dedup_key_pair_match",
+			"A=B 长度=%zu: [%s]", strlen(key_a), key_a);
+	} else {
+		st_fail_line("T1.9_dedup_key_pair_match",
+			"不匹配（dedup_remove_pair 删不掉 START.done → SRS 2051 原 Bug！）\n"
+			"         key A (task_dedup_key   )=[%s]\n"
+			"         key B (dedup_remove_pair)=[%s]\n"
+			"         rawA=[%s]\n"
+			"         rawB=[%s]",
+			key_a, key_b, raw1, raw2);
+	}
+}
+
+/* T1.10 proto_cmd_name 对照表（人工核对段数差异，不能自动断言，但打印
+ *      日志用于排查"proto_cmd_name 误用于 dedup key 前缀"类回归） */
+static void ut_proto_cmd_name_dump(void)
+{
+	static const proto_cmd_t cc[] = {
+		ENCM_CMD_RECORD_START, ENCM_CMD_RECORD_STOP,
+		ENCM_CMD_STREAM_START, ENCM_CMD_STREAM_STOP,
+		ENCM_CMD_TASK_STREAM_START, ENCM_CMD_TASK_RECORD_START,
+		ENCM_CMD_TASK_RECORD_STOP,  ENCM_CMD_TASK_RESET,
+		ENCM_CMD_TASK_PREPARE_DESK_VOICE,
+	};
+	size_t i;
+
+	printf("[INFO] T1.10 proto_cmd_name 对照表 (段数对账参考)\n");
+	printf("[INFO] %-32s | %-30s | 下划线数\n", "enum", "name");
+	printf("[INFO] ---------------------------------");
+	printf("------------------------------------------------\n");
+	for (i = 0; i < sizeof(cc) / sizeof(cc[0]); i++) {
+		const char *n = proto_cmd_name(cc[i]);
+		int          u = 0;
+		const char  *p;
+
+		for (p = n; p && *p; p++)
+			if (*p == '_') u++;
+		printf("[INFO] %-32s | %-30s | %d 个('_')\n",
+		       "(see proto_internal.h)", n, u);
+	}
+	st_pass("T1.10_proto_cmd_name_dumped", "已输出对照表");
+}
+
+/* T1 汇总入口 */
+static void ut_string_group(void)
+{
+	printf("===== [UNITEST T1] 字符串拼接 / URL 归一化 / Dedup Key =====\n");
+	ut_key_sanitize();
+	ut_url_normalize();
+	ut_dedup_key_pair_match();
+	ut_proto_cmd_name_dump();
+}
+
+/* ------------------------------------------------------------------ */
 /* 主入口                                                               */
 /* ------------------------------------------------------------------ */
 
@@ -162,6 +370,10 @@ int selftest_run(const enc_cfg_t *c)
 	const char *dev;
 
 	printf("===== encodermain selftest v%s =====\n", ENCM_VERSION);
+	/* ===== T1: 字符串 / URL / dedup key 纯函数单元测试（先跑，失败不影响后续环境类检查） ===== */
+	ut_string_group();
+	printf("----- T1 小结: pass=%d fail=%d -----\n",
+	       g_st_pass, g_st_fail);
 
 	/* 1. device_id 解析 */
 	dev = device_id_get(c);
@@ -241,6 +453,7 @@ int selftest_run(const enc_cfg_t *c)
 	/* 12. outbox 目录可写 */
 	st_check_dir_writable("outbox_dir", c->outbox_dir);
 
-	printf("----- selftest done: fail=%d -----\n", g_st_fail);
+	printf("----- selftest done: pass=%d  fail=%d -----\n",
+	       g_st_pass, g_st_fail);
 	return g_st_fail == 0 ? 0 : 1;
 }

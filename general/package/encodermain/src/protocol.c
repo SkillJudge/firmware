@@ -195,6 +195,18 @@ void proto_key_sanitize(char *buf, size_t sz, const char *src)
 {
 	size_t o = 0;
 
+	if (!buf || sz < 2)
+		return;
+	/* T1.1 2026-09-01: 跳过"所有前导 '.' 或 '_'"，避免在 ext4/overlayfs
+	 * 上生成 `.xxx.done` 这类 Linux 隐藏文件。隐藏文件会导致:
+	 *   1) ls dedup/ 默认不显示 → 调试"凭空消失"
+	 *   2) *.done glob 匹配不到 → dedup_cleanup 清理不掉（泄露）
+	 *   3) dedup_check 用 glob 也可能漏匹配 → 去重语义错乱
+	 * 前导 '_' 同样删，语义不变 (只是分隔符)，与 bash cache_key 生成一致。 */
+	if (src) {
+		while (*src && (*src == '.' || *src == '_'))
+			src++;
+	}
 	for (; src && *src && o + 1 < sz; src++) {
 		unsigned char ch = (unsigned char)*src;
 

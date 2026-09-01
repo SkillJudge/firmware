@@ -39,6 +39,10 @@
 extern const char *det_wifi_watch(const enc_cfg_t *c,
 				  char *reason, size_t rsz);
 
+/* hw.c 提供：硬件自检（9101/9102），证据源策略见 hw.c 头注释 */
+extern const char *det_hw_watch(const enc_cfg_t *c,
+				char *reason, size_t rsz);
+
 static void state_path(const enc_cfg_t *c, const char *name,
 		       char *buf, size_t sz)
 {
@@ -995,6 +999,7 @@ static bool en_sysres(const enc_cfg_t *c) { return c->enable_sysres; }
 static bool en_process(const enc_cfg_t *c) { return c->enable_process; }
 static bool en_stream(const enc_cfg_t *c) { return c->enable_stream; }
 static bool en_wifi(const enc_cfg_t *c) { return c->enable_wifi; }
+static bool en_hw(const enc_cfg_t *c) { return c->enable_hw; }
 
 /* ==================== 注册表 ==================== */
 
@@ -1056,6 +1061,10 @@ det_t *detectors_registry(void)
 	{ "wifi_watch",   30,  3, 2,  en_wifi, det_wifi_watch,    NULL,
 	  { 1001, "wifi_disconnected", "warn", "WiFi 断线(%s)，自动重连中" },
 	  { 1002, "wifi_reconnected", "info", "WiFi 已恢复(%s)" } },
+
+	{ "hw_watch",    3600,  1, 1,  en_hw, det_hw_watch,       NULL,
+	  { 9101, "hw_fault", "error", "硬件自检发现异常(%s)" },
+	  { 9102, "hw_recovered", "info", "硬件自检恢复正常" } },
 
 	{ "cron_events",   5,  1, 1,  en_wifi, det_events,        NULL,
 	  { 0, "", "", "" },

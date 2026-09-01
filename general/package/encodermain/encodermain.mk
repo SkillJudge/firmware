@@ -14,7 +14,7 @@
 #
 ################################################################################
 
-ENCODERMAIN_VERSION = 3.2.0
+ENCODERMAIN_VERSION = 3.2.1
 ENCODERMAIN_SITE = $(ENCODERMAIN_PKGDIR)/src
 ENCODERMAIN_SITE_METHOD = local
 ENCODERMAIN_LICENSE = Public Domain

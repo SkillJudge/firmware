@@ -44,6 +44,7 @@ typedef struct {
     bool        enable_sysres;
     bool        enable_process;
     bool        enable_stream;
+    bool        enable_hw;         /* 硬件自检 (hw_watch 9101/9102, hw.c) */
 
     /* MQTT —— 凭据不落明文默认值：优先环境变量 ENC_MQTT_PASS，
      * 其次 /root/encoder/config.sh 继承，conf 覆盖最高优先级。 */
@@ -77,6 +78,10 @@ typedef struct {
 
     /* WiFi 原生检测（wifi.c） */
     char        wifi_iface[16];    /* 默认 wlan0 */
+
+    /* 硬件自检（hw.c det_hw_watch）：周期独立于主循环节奏，
+     * 用户场景先密集(3600s=1h)后调稀(86400s=1天) */
+    int         hw_interval_sec;
 } enc_cfg_t;
 
 int  cfg_load(enc_cfg_t *c, const char *path);

@@ -13,7 +13,7 @@
 #
 ################################################################################
 
-ENCALERTD_VERSION = 3.2.0
+ENCALERTD_VERSION = 3.2.1
 ENCALERTD_SITE = $(ENCALERTD_PKGDIR)/src
 ENCALERTD_SITE_METHOD = local
 ENCALERTD_LICENSE = Public Domain

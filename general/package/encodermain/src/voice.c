@@ -84,14 +84,14 @@ static int voice_yaml_set(const enc_cfg_t *c, const char *key, const char *val)
  * audio.enabled 负责创建底层 ADEC/AO 通道，两者必须同时开启 */
 static int voice_apply_audio_yaml(const enc_cfg_t *c)
 {
-	if (voice_yaml_set(c, ".audio.enabled", "true") != 0 ||
-	    voice_yaml_set(c, ".audio.volume", VOICE_INPUT_VOLUME) != 0 ||
-	    voice_yaml_set(c, ".audio.srate", VOICE_SAMPLE_RATE) != 0 ||
-	    voice_yaml_set(c, ".audio.codec", VOICE_CODEC) != 0 ||
-	    voice_yaml_set(c, ".audio.outputVolume", VOICE_OUTPUT_VOLUME) != 0)
+	if (voice_yaml_set(c, "audio.enabled", "true") != 0 ||
+	    voice_yaml_set(c, "audio.volume", VOICE_INPUT_VOLUME) != 0 ||
+	    voice_yaml_set(c, "audio.srate", VOICE_SAMPLE_RATE) != 0 ||
+	    voice_yaml_set(c, "audio.codec", VOICE_CODEC) != 0 ||
+	    voice_yaml_set(c, "audio.outputVolume", VOICE_OUTPUT_VOLUME) != 0)
 		return -1;
 	/* outputEnabled 必须最后写，避免中间态被 Majestic 读取 */
-	return voice_yaml_set(c, ".audio.outputEnabled", "true");
+	return voice_yaml_set(c, "audio.outputEnabled", "true");
 }
 
 int voice_init(const enc_cfg_t *c)

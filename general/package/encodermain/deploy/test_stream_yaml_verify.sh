@@ -333,6 +333,199 @@ stop_until_idle
 
 run_case T2 "$URL_B" "/live/${EXPECTED_STREAM_NAME}" "$EXPECT_B_FINAL"
 
+# =====================================================================
+# 2026-09-01 新增: T2.3 ~ T2.8 扩展 E2E 用例（覆盖伪两级 / fallback /
+# dedup 重放 / URL 切换 / STOP 幂等 / 驼峰-蛇形协议）
+# =====================================================================
+
+# ---- 先 idle 清干净 ----
+MSGID=$(next_msgid); publish_cmd "$TOPIC_STOP" "{\"msgId\":${MSGID},\"msg\":\"stopStream\",\"data\":{}}"
+stop_until_idle
+
+# T2.3: 伪两级（非 live 首段）→ C 端必须丢弃 otherApp 强制插 live
+URL_FAKE2="rtmp://${MQTT_HOST}:1935/otherApp/demoTask_$$"
+EXPECT_FAKE2="rtmp://${MQTT_HOST}:1935/live/${EXPECTED_STREAM_NAME}"
+run_case T2.3 "$URL_FAKE2" "/live/${EXPECTED_STREAM_NAME}" "$EXPECT_FAKE2"
+MSGID=$(next_msgid); publish_cmd "$TOPIC_STOP" "{\"msgId\":${MSGID},\"msg\":\"stopStream\",\"data\":{}}"
+stop_until_idle
+
+# T2.4: 空 streamUrl → 回退 rt.srs_url 拼接 /live/stream_<ID>
+#       streamUrl=空或不给字段, encodermain 应从 runtime state 取 srs_url
+#       再走 proto_stream_url_normalize fallback 分支。
+run_case T2.4 "" "/live/${EXPECTED_STREAM_NAME}" "rtmp://${MQTT_HOST}:1935/live/${EXPECTED_STREAM_NAME}"
+MSGID=$(next_msgid); publish_cmd "$TOPIC_STOP" "{\"msgId\":${MSGID},\"msg\":\"stopStream\",\"data\":{}}"
+stop_until_idle
+
+# T2.5: 同 URL 连续两次 START → 第二次 ACK 应 duplicate(或 success),
+#       outgoing 保持非空 TCP ESTAB 不能断。
+URL_T25="rtmp://${MQTT_HOST}:1935/live/caseT25_$$"
+EXPECT_T25="rtmp://${MQTT_HOST}:1935/live/${EXPECTED_STREAM_NAME}"
+log "========== CASE T2.5 start (同URL重发) =========="
+FIRST_YAML=""
+# 第1次 start
+msgid=$(next_msgid)
+publish_cmd "$TOPIC_START" \
+  "{\"msgId\":${msgid},\"msg\":\"startStream\",\"data\":{\"duration\":60,\"streamUrl\":\"${URL_T25}\",\"taskId\":\"case_T25_$$\"}}"
+sleep 25; FIRST_YAML=$(yaml_get .outgoing.server)
+# 第2次 start (相同 URL 同 taskId)
+msgid=$(next_msgid)
+publish_cmd "$TOPIC_START" \
+  "{\"msgId\":${msgid},\"msg\":\"startStream\",\"data\":{\"duration\":60,\"streamUrl\":\"${URL_T25}\",\"taskId\":\"case_T25_$$\"}}"
+sleep 15
+SECOND_YAML=$(yaml_get .outgoing.server); PUB=$(state_get is_publishing)
+TCP_HIT=$(awk 'NR>1 && $4=="01" { n=split($3,a,":"); if (n==2 && a[2]=="078F") { print NR; exit } }' /proc/net/tcp 2>/dev/null | head -n1)
+log "  T2.5 snapshot: run1_yaml=[$FIRST_YAML] run2_yaml=[$SECOND_YAML]"
+lf=0
+if [ -n "$FIRST_YAML" ] && printf '%s' "$FIRST_YAML" | grep -qF '/live/'; then
+  log "  T2.5-A PASS 首次 start yaml 已带 /live/"
+else
+  log "  T2.5-A FAIL 首次 start yaml 缺 /live 段: [$FIRST_YAML]"; lf=$((lf+1))
+fi
+if [ -n "$SECOND_YAML" ] && [ "$SECOND_YAML" = "$EXPECT_T25" ]; then
+  log "  T2.5-B PASS 重发后 yaml 与期望值一致 (dedup 没清 outgoing)"
+else
+  log "  T2.5-B FAIL 重发后 yaml=[$SECOND_YAML] 期望=[$EXPECT_T25]"; lf=$((lf+1))
+fi
+if [ "$PUB" = "true" ]; then log "  T2.5-C PASS is_publishing=true";
+else log "  T2.5-C FAIL is_publishing=[$PUB]"; lf=$((lf+1)); fi
+if [ -n "$TCP_HIT" ]; then log "  T2.5-D PASS TCP :1935 ESTABLISHED";
+else log "  T2.5-D FAIL TCP :1935 断链(重发清了yaml?)"; lf=$((lf+1)); fi
+PASS_CNT=$((PASS_CNT + 4 - lf)); FAIL_CNT=$((FAIL_CNT + lf))
+[ "$lf" -gt 0 ] && CASE_FAILS=$((CASE_FAILS+1))
+# 清 T2.5 dedup key, 保证下一 case 不被 replay 卡死
+MSGID=$(next_msgid); publish_cmd "$TOPIC_STOP" "{\"msgId\":${MSGID},\"msg\":\"stopStream\",\"data\":{}}"
+stop_until_idle
+log "========== CASE T2.5 end (fails=$lf) =========="
+
+# T2.6: START_A → STOP → START_B 不同 URL
+#   关键断言: STOP 后 START_A.done 必须真删除 (removed_done>=1),
+#   第二次 START_B 必须全新执行 (非 duplicate 分支), outgoing=B 规范化结果.
+URL_A6="rtmp://${MQTT_HOST}:1935/live/urlA_$$"
+URL_B6="rtmp://${MQTT_HOST}:1935/otherApp/urlB_$$"
+EXPECT_B6="rtmp://${MQTT_HOST}:1935/live/${EXPECTED_STREAM_NAME}"
+DEDUP_DIR="${STATE_DIR}/task_dedup"
+mkdir -p "$DEDUP_DIR"
+log "========== CASE T2.6 start (不同URL切换, 验证 STOP 真删 START.done) =========="
+# START_A
+msgid=$(next_msgid)
+publish_cmd "$TOPIC_START" \
+  "{\"msgId\":${msgid},\"msg\":\"startStream\",\"data\":{\"duration\":120,\"streamUrl\":\"${URL_A6}\",\"taskId\":\"case_T26A_$$\"}}"
+sleep 25
+N1=$(find "$DEDUP_DIR" -name '*.done' 2>/dev/null | wc -l)
+log "  T2.6  START_A 完成后 *.done 数=$N1"
+# STOP
+MSGID=$(next_msgid); publish_cmd "$TOPIC_STOP" "{\"msgId\":${MSGID},\"msg\":\"stopStream\",\"data\":{}}"
+stop_until_idle
+sleep 2
+N2=$(find "$DEDUP_DIR" -name '*.done' 2>/dev/null | wc -l)
+log "  T2.6  STOP 完成后 *.done 数=$N2 (期望 < N1=$N1，START_A.done 被移除)"
+# START_B
+msgid=$(next_msgid)
+publish_cmd "$TOPIC_START" \
+  "{\"msgId\":${msgid},\"msg\":\"startStream\",\"data\":{\"duration\":120,\"streamUrl\":\"${URL_B6}\",\"taskId\":\"case_T26B_$$\"}}"
+sleep 25
+B_YAML=$(yaml_get .outgoing.server); B_PUB=$(state_get is_publishing)
+lf=0
+if [ "$N1" -eq 0 ]; then
+  log "  T2.6-A INFO pre-clean 已清空 task_dedup, N1=0 无法验证删除效果 ($N1 -> $N2)"
+elif [ "$N2" -lt "$N1" ]; then
+  log "  T2.6-A PASS STOP 真删除了 START_A.done ($N1 -> $N2)"
+else
+  log "  T2.6-A FAIL STOP 未删除 START_A.done! ($N1 -> $N2)"; lf=$((lf+1))
+fi
+if [ "$B_YAML" = "$EXPECT_B6" ]; then
+  log "  T2.6-B PASS START_B.yaml = $EXPECT_B6 (伪两级归一化成功)"
+else
+  log "  T2.6-B FAIL START_B.yaml = [$B_YAML] != [$EXPECT_B6]"; lf=$((lf+1))
+fi
+if [ "$B_PUB" = "true" ]; then log "  T2.6-C PASS is_publishing=true";
+else log "  T2.6-C FAIL is_publishing=[$B_PUB]"; lf=$((lf+1)); fi
+PASS_CNT=$((PASS_CNT + 3 - lf)); FAIL_CNT=$((FAIL_CNT + lf))
+[ "$lf" -gt 0 ] && CASE_FAILS=$((CASE_FAILS+1))
+MSGID=$(next_msgid); publish_cmd "$TOPIC_STOP" "{\"msgId\":${MSGID},\"msg\":\"stopStream\",\"data\":{}}"
+stop_until_idle
+log "========== CASE T2.6 end (fails=$lf) =========="
+
+# T2.7: 连续三次 STOP(幂等) → 不应出现 L2 dedup replay 卡死,
+#       最终 outgoing=空 + is_publishing=false 且 stop_until_idle ≤2 轮达成.
+log "========== CASE T2.7 start (STOP x3 幂等) =========="
+# 先造一个真 START
+msgid=$(next_msgid)
+publish_cmd "$TOPIC_START" \
+  "{\"msgId\":${msgid},\"msg\":\"startStream\",\"data\":{\"duration\":600,\"streamUrl\":\"rtmp://${MQTT_HOST}:1935/live/caseT27_$$\"}}"
+sleep 20
+# 第1次 STOP: 这里不硬清兜底! 让 stop_until_idle 纯靠 MQTT.
+max_try=5; ok=0
+for i in 1 2 3 4 5; do
+  mid=$(next_msgid)
+  publish_cmd "$TOPIC_STOP" "{\"msgId\":${mid},\"msg\":\"stopStream\",\"data\":{}}"
+  sleep 4
+  ysv=$(yaml_get .outgoing.server); pub=$(state_get is_publishing)
+  log "  T2.7 STOP_round=$i server=[$ysv] pub=[$pub]"
+  if [ -z "$ysv" ] && [ "$pub" != "true" ]; then ok=$i; break; fi
+done
+lf=0
+if [ "$ok" -ge 1 ] && [ "$ok" -le 2 ]; then
+  log "  T2.7-A PASS STOP 幂等: 第 ${ok} 轮达成 idle (≤2 轮证明 STOP L2 dedup 没卡死)"
+else
+  if [ "$ok" -ge 3 ]; then
+    log "  T2.7-A WARN STOP 用了 ${ok} 轮才 idle (>2轮可能存在 L2 replay)"
+  else
+    log "  T2.7-A FAIL STOP 5 轮后仍未 idle!"; lf=$((lf+1))
+  fi
+fi
+# 再发两次 STOP (无 MQTT 命令 stop_until_idle 兜底不做)
+for extra in 1 2; do
+  mid=$(next_msgid)
+  publish_cmd "$TOPIC_STOP" "{\"msgId\":${mid},\"msg\":\"stopStream\",\"data\":{}}"
+  sleep 2
+done
+final_server=$(yaml_get .outgoing.server); final_pub=$(state_get is_publishing)
+if [ -z "$final_server" ] && [ "$final_pub" != "true" ]; then
+  log "  T2.7-B PASS STOP 3+2 次后保持 idle 幂等"
+else
+  log "  T2.7-B FAIL 连续 STOP 后仍在推流 server=[$final_server] pub=[$final_pub]"
+  lf=$((lf+1))
+fi
+PASS_CNT=$((PASS_CNT + 2 - lf)); FAIL_CNT=$((FAIL_CNT + lf))
+[ "$lf" -gt 0 ] && CASE_FAILS=$((CASE_FAILS+1))
+# 兜底清状态
+MSGID=$(next_msgid); publish_cmd "$TOPIC_STOP" "{\"msgId\":${MSGID},\"msg\":\"stopStream\",\"data\":{}}"
+stop_until_idle
+log "========== CASE T2.7 end (fails=$lf) =========="
+
+# T2.8: 驼峰 vs 蛇形 payload
+#   bug: encodermain 曾把 start_stream (蛇形) 误作为合法 action 解析。
+#   修复后: ctrlserver/protocol 规定 payload.msg 必须是驼峰 startStream。
+#   用蛇形下发 → 期待 encodermain 不写 outgoing, is_publishing 保持 false.
+log "========== CASE T2.8 start (payload 蛇形 start_stream 应被拒) =========="
+stop_until_idle
+sleep 2
+PRE_SRV=$(yaml_get .outgoing.server); PRE_PUB=$(state_get is_publishing)
+msgid=$(next_msgid)
+publish_cmd "$TOPIC_START" \
+  "{\"msgId\":${msgid},\"msg\":\"start_stream\",\"data\":{\"duration\":60,\"streamUrl\":\"rtmp://${MQTT_HOST}:1935/live/caseT28snake_$$\"}}"
+sleep 20
+POST_SRV=$(yaml_get .outgoing.server); POST_PUB=$(state_get is_publishing)
+lf=0
+# 期望: server 仍 = PRE (或空), publishing 仍 = PRE (或 false)
+if [ -z "$POST_SRV" ] || [ "$POST_SRV" = "$PRE_SRV" ]; then
+  log "  T2.8-A PASS 蛇形 start_stream 未写入 outgoing.server"
+else
+  log "  T2.8-A FAIL 蛇形 start_stream 错误触发了 outgoing=[$POST_SRV] (协议应为驼峰!)"; lf=$((lf+1))
+fi
+if [ "$POST_PUB" != "true" ]; then
+  log "  T2.8-B PASS 蛇形 start_stream 未置 is_publishing=true"
+else
+  log "  T2.8-B FAIL 蛇形 start_stream 把 is_publishing 置 true"; lf=$((lf+1))
+fi
+PASS_CNT=$((PASS_CNT + 2 - lf)); FAIL_CNT=$((FAIL_CNT + lf))
+[ "$lf" -gt 0 ] && CASE_FAILS=$((CASE_FAILS+1))
+# 恢复: 把可能的脏状态清掉 (即使 PASS 也执行, 幂等)
+MSGID=$(next_msgid); publish_cmd "$TOPIC_STOP" "{\"msgId\":${MSGID},\"msg\":\"stopStream\",\"data\":{}}"
+stop_until_idle
+log "========== CASE T2.8 end (fails=$lf) =========="
+
 # ---------- 步骤 D: 停止 (除非 --skip-stop) ----------
 if [ "$SKIP_STOP" -eq 0 ]; then
   log "=== 用例收尾: 下发 stop_stream ==="

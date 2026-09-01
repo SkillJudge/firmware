@@ -302,9 +302,13 @@ int main(int argc, char **argv)
 	install_signals();
 
 	/* 配置驱动的动态覆盖 */
-	for (det_t *d = detectors_registry(); d; d = d->next)
+	for (det_t *d = detectors_registry(); d; d = d->next) {
 		if (!strcmp(d->name, "low_battery"))
 			d->confirm_cnt = g_cfg.low_batt_confirm;
+		if (!strcmp(d->name, "hw_watch") &&
+		    g_cfg.hw_interval_sec > 0)
+			d->every_sec = g_cfg.hw_interval_sec;
+	}
 
 	write_pidfile();
 	device_id_get(&g_cfg);              /* 预热并记录解析结果 */
