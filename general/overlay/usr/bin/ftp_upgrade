@@ -31,7 +31,7 @@ fi
 # 校验大小
 size=$(stat -c "%s" "$FIRMWARE_FILE")
 min=$((7*1024*1024))
-max=$((8*1024*1024))
+max=9175040
 
 if [ "$size" -lt "$min" ] || [ "$size" -gt "$max" ]; then
     echo "CHECKFAIL"
