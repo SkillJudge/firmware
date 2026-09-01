@@ -32,7 +32,6 @@ general/overlay/etc/init.d/S99ircut_day
 general/overlay/usr/bin/ftp_upgrade
 general/overlay/usr/bin/ircut_demo
 general/overlay/usr/bin/led_test
-general/overlay/usr/bin/led_test.sh
 general/overlay/usr/bin/power_key_test
 general/overlay/root/encoder/actions/sd_remount.sh
 general/overlay/root/encoder/actions/record_purge.sh
