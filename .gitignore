@@ -3,3 +3,8 @@ output/
 buildroot-*
 .DS_Store
 *.old
+general/package/factoryinit/src/ipc_server
+.gitignore
+general/overlay/usr/bin/ircut_demo
+general/overlay/usr/bin/led_test.sh
+

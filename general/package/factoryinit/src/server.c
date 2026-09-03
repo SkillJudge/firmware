@@ -74,6 +74,7 @@ int main() {
             char wifi_ip[64] = {0};
             char eth_mac[64] = {0};
             char wifi_mac[64] = {0};
+            char battery[16] = {0};
 
             // 全部初始化为 null
             strcpy(ver, "null");
@@ -83,6 +84,7 @@ int main() {
             strcpy(wifi_ip, "null");
             strcpy(eth_mac, "null");
             strcpy(wifi_mac, "null");
+            strcpy(battery, "null");
 
             // 读取版本
             get_cmd_output("cat /etc/version 2>/dev/null", ver, sizeof(ver));
@@ -102,19 +104,23 @@ int main() {
             // 无线 IP
             get_cmd_output("ip addr show wlan0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1", wifi_ip, sizeof(wifi_ip)); 
 
-            // 读取 wlan0 MAC 
+            // 读取 wlan0 MAC
             get_cmd_output("cat /sys/class/net/wlan0/address 2>/dev/null", wifi_mac, sizeof(wifi_mac));
+
+            // 读取电量百分比（读不到保持 null）
+            get_cmd_output("sh /root/encoder/battery.sh read 2>/dev/null", battery, sizeof(battery));
 
             // 拼接协议（严格格式）
             snprintf(resp_buf, sizeof(resp_buf),
-                "DEVICEID=%s|VER=%s|IP=%s|WIFI_IP=%s|IPCNUM=%s|MAC=%s|WIFI_MAC=%s",
+                "DEVICEID=%s|VER=%s|IP=%s|WIFI_IP=%s|IPCNUM=%s|MAC=%s|WIFI_MAC=%s|BATTERY=%s",
                 deviceid,
                 ver,
                 eth_ip,
                 wifi_ip,
                 ipnum,
                 eth_mac,
-                wifi_mac
+                wifi_mac,
+                battery
             );
 
             // 发送
@@ -172,16 +178,29 @@ int main() {
         {
             const char *ftp_url = buffer + strlen("FIRMWAREUPDATE=");
             char cmd[512];
+            char battery[16];
+            int battery_percent;
 
-            // 拼接后台执行命令
-            // 1. 显式调用 /bin/sh 执行脚本
-            // 2. 末尾加上 & 让其进入系统后台运行，绝不阻塞主循环
-            snprintf(cmd, sizeof(cmd), "/bin/sh /usr/bin/ftp_upgrade \"%s\" &", ftp_url);
+            // 刷机前电量检查：电量低于 30%（或读不到电量）拒绝刷机，
+            // 防止烧写过程中断电变砖。电量读取走 /root/encoder/battery.sh read。
+            get_cmd_output("sh /root/encoder/battery.sh read 2>/dev/null", battery, sizeof(battery));
+            battery_percent = atoi(battery);
+            if (battery_percent < 30) {
+                snprintf(resp_buf, sizeof(resp_buf), "BATTERY_LOW=%s", battery);
+                sendto(sock, resp_buf, strlen(resp_buf), 0, (struct sockaddr *)&client_addr, addr_len);
+                printf("[UPDATE] Rejected, battery %s%% < 30%%\n",
+                       (strcmp(battery, "null") == 0) ? "unreadable(null)" : battery);
+            } else {
+                // 拼接后台执行命令
+                // 1. 显式调用 /bin/sh 执行脚本
+                // 2. 末尾加上 & 让其进入系统后台运行，绝不阻塞主循环
+                snprintf(cmd, sizeof(cmd), "/bin/sh /usr/bin/ftp_upgrade \"%s\" &", ftp_url);
 
-            printf("[UPDATE] Triggered background upgrade: %s\n", cmd);
+                printf("[UPDATE] Triggered background upgrade: %s\n", cmd);
 
-            // 执行后立刻返回，主程序不会被卡死
-            system(cmd);
+                // 执行后立刻返回，主程序不会被卡死
+                system(cmd);
+            }
         }
         else if (strcmp(buffer, "HWTEST") == 0)
         {
