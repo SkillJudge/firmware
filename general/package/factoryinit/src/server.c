@@ -174,6 +174,16 @@ int main() {
             // 后台延时 2 秒后重启，给 UDP 回包留出时间
             system("(sleep 2; reboot) &");
         }
+        else if (strcmp(buffer, "POWEROFF") == 0) {
+            // 硬关机：返回确认后，后台执行硬件关机脚本。
+            // 关机电路：PCF8574 @ I2C1/0x20 的 P2（软关机引脚，常高），
+            // 脚本内 sync 落盘 + 后台 poweroff 兜底 + 拉低 P2 并保持，
+            // 硬件检测到 P2 持续低电平（>=2s）后彻底断电。
+            // 脚本前台会阻塞数秒，必须后台运行，绝不阻塞 UDP 主循环。
+            sendto(sock, "POWEROFF_SUCCESS", 16, 0, (struct sockaddr *)&client_addr, addr_len);
+            printf("[POWEROFF] Hard poweroff command received, asserting P2 shutdown pin\n");
+            system("( sleep 1; /bin/sh /root/encoder/actions/shutdown_lowbattery.sh ) >/dev/null 2>&1 &");
+        }
         else if (strstr(buffer, "FIRMWAREUPDATE=") == buffer)
         {
             const char *ftp_url = buffer + strlen("FIRMWAREUPDATE=");
