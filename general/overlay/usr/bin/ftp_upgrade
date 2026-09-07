@@ -1,14 +1,28 @@
 #!/bin/sh
 
 FTP_URL="$1"
+CLIENT_IP="$2"
 LOCAL_PATH="/tmp/firmware"
 FIRMWARE_FILE="$LOCAL_PATH/rootfs.squashfs.gk7205v300"
+
+# ======= 失败回包函数 =======
+# 所有"未刷机就退出"的出口都必须调用 send_fail，
+# 把 UPGRADE_FAIL=<reason> 通过 UDP 回传给 C# 客户端，
+# 防止客户端因设备未重启而误判为升级成功。
+send_fail() {
+    local reason="$1"
+    echo "UPGRADE_FAIL=$reason"
+    if [ -n "$CLIENT_IP" ]; then
+        printf 'UPGRADE_FAIL=%s' "$reason" | nc -u -w1 "$CLIENT_IP" 8086 2>/dev/null
+    fi
+}
 
 # ======= 核心修改：改用不随网络对时改变的 uptime (秒数) =======
 START_TIME=$(awk '{print int($1)}' /proc/uptime)
 
 echo "=== [DEBUG] Start firmware update script ==="
 echo "=== [DEBUG] Target URL: $FTP_URL"
+echo "=== [DEBUG] Client IP: $CLIENT_IP"
 
 mkdir -p "$LOCAL_PATH"
 rm -rf "$LOCAL_PATH"/*
@@ -24,8 +38,9 @@ DOWNLOAD_DURATION=$((DOWNLOAD_END - DOWNLOAD_START))
 echo "=== [DEBUG] Download finished. Took $DOWNLOAD_DURATION seconds. ==="
 
 if [ $WGET_RET -ne 0 ] || [ ! -f "$FIRMWARE_FILE" ]; then
-    echo "DOWNLOADFAIL"
-    exit 0
+    # 下载失败：未刷机，回包失败
+    send_fail "DOWNLOAD_FAIL"
+    exit 1
 fi
 
 # 校验大小
@@ -34,8 +49,9 @@ min=$((7*1024*1024))
 max=9175040
 
 if [ "$size" -lt "$min" ] || [ "$size" -gt "$max" ]; then
-    echo "CHECKFAIL"
-    exit 0
+    # 尺寸校验失败：未刷机，回包失败
+    send_fail "SIZE_CHECK_FAIL:size=$size,min=$min,max=$max"
+    exit 1
 fi
 
 echo "=== [DEBUG] Size check passed. Starting sysupgrade... ==="
@@ -62,8 +78,10 @@ if [ $SYS_RET -eq 0 ] || [ $SYS_RET -eq 1 ]; then
     sleep 5
     reboot
 else
-    echo "FAIL"
+    # sysupgrade 执行失败：未刷机（或刷机未完成），回包失败
+    send_fail "SYSUPGRADE_FAIL:ret=$SYS_RET"
     echo "=== [DEBUG] Total time spent before failure: $TOTAL_DURATION seconds. ==="
+    exit 1
 fi
 
 exit 0

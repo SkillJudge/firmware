@@ -213,23 +213,35 @@ int main() {
             char cmd[512];
             char battery[16];
             int battery_percent;
+            char client_ip[INET_ADDRSTRLEN];
+
+            // 取客户端 IP，传给 ftp_upgrade，便于脚本在失败时回传 UPGRADE_FAIL
+            inet_ntop(AF_INET, &(client_addr.sin_addr), client_ip, sizeof(client_ip));
 
             // 刷机前电量检查：电量低于 30%（或读不到电量）拒绝刷机，
             // 防止烧写过程中断电变砖。电量读取走 /root/encoder/battery.sh read。
             get_cmd_output("sh /root/encoder/battery.sh read 2>/dev/null", battery, sizeof(battery));
             battery_percent = atoi(battery);
             if (battery_percent < 30) {
-                snprintf(resp_buf, sizeof(resp_buf), "BATTERY_LOW=%s", battery);
+                // 电量不足：明确回包升级失败，C# 端应立即终止等待并提示失败
+                snprintf(resp_buf, sizeof(resp_buf), "UPGRADE_FAIL=BATTERY_LOW:%s", battery);
                 sendto(sock, resp_buf, strlen(resp_buf), 0, (struct sockaddr *)&client_addr, addr_len);
-                printf("[UPDATE] Rejected, battery %s%% < 30%%\n",
+                printf("[UPDATE] Rejected, battery %s%% < 30%%, sent UPGRADE_FAIL\n",
                        (strcmp(battery, "null") == 0) ? "unreadable(null)" : battery);
             } else {
                 // 拼接后台执行命令
                 // 1. 显式调用 /bin/sh 执行脚本
-                // 2. 末尾加上 & 让其进入系统后台运行，绝不阻塞主循环
-                snprintf(cmd, sizeof(cmd), "/bin/sh /usr/bin/ftp_upgrade \"%s\" &", ftp_url);
+                // 2. 第二个参数传入客户端 IP，ftp_upgrade 在所有失败出口回传 UPGRADE_FAIL
+                // 3. 末尾加上 & 让其进入系统后台运行，绝不阻塞主循环
+                snprintf(cmd, sizeof(cmd),
+                         "/bin/sh /usr/bin/ftp_upgrade \"%s\" \"%s\" &",
+                         ftp_url, client_ip);
 
                 printf("[UPDATE] Triggered background upgrade: %s\n", cmd);
+
+                // 先回一个 UPGRADE_STARTED，告知客户端指令已被接受并开始执行
+                sendto(sock, "UPGRADE_STARTED", 15, 0,
+                       (struct sockaddr *)&client_addr, addr_len);
 
                 // 执行后立刻返回，主程序不会被卡死
                 system(cmd);
