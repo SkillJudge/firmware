@@ -71,21 +71,40 @@ cd ..
 make BOARD=my clean all
 
 # 编译结束后，将版本号嵌入固件文件名
+# 命名规则：真实扩展名(.tgz/.bin/.tar/.cpio/.img)保留在末尾，
+#           板型后缀(.gk7205v300)视为文件名一部分，版本号追加到其后面
 echo "--> 步骤 5: 将版本号嵌入固件文件名 ..."
-ORIG_IMG=$(ls -t ./output/images/openipc-*.bin 2>/dev/null | head -1)
-if [ -n "${ORIG_IMG}" ] && [ -f "${ORIG_IMG}" ]; then
-    IMG_BASENAME=$(basename "${ORIG_IMG}")
-    IMG_NAME="${IMG_BASENAME%.bin}"
-    VERSIONED_IMG="./output/images/${IMG_NAME}-${FW_VERSION}.bin"
-    cp -f "${ORIG_IMG}" "${VERSIONED_IMG}"
-    echo "   ✓ 已生成带版本号的固件: ${VERSIONED_IMG}"
-else
-    echo "   ⚠️  未找到 output/images/openipc-*.bin，跳过版本重命名"
+append_version() {
+    local src="$1" ver="$2"
+    case "$src" in
+        *.tgz|*.bin|*.tar|*.cpio|*.img)
+            echo "${src%.*}-${ver}.${src##*.}"
+            ;;
+        *)
+            echo "${src}-${ver}"
+            ;;
+    esac
+}
+
+VERSIONED_COUNT=0
+for pat in "openipc.*.tgz" "uImage.*" "rootfs.squashfs.*"; do
+    for f in ./output/images/$pat; do
+        [ -f "$f" ] || continue
+        fname=$(basename "$f")
+        vname=$(append_version "$fname" "$FW_VERSION")
+        cp -f "$f" "./output/images/$vname"
+        echo "   ✓ 已生成带版本号的固件: $vname"
+        VERSIONED_COUNT=$((VERSIONED_COUNT + 1))
+    done
+done
+
+if [ "$VERSIONED_COUNT" -eq 0 ]; then
+    echo "   ⚠️  未找到 output/images/ 下的固件产物（openipc.*.tgz / uImage.* / rootfs.squashfs.*），跳过版本重命名"
 fi
 
 echo "=================================================="
 echo "🎉 恭喜！OpenIPC [my] 板型固件编译完成！"
 echo "固件版本号: ${FW_VERSION}"
 echo "固件产物存放在 ./output/images/ 目录下。"
-echo "带版本号的固件: ${VERSIONED_IMG:-N/A}"
+echo "已生成带版本号(${FW_VERSION})的固件数量: ${VERSIONED_COUNT}"
 echo "=================================================="
