@@ -1408,6 +1408,8 @@ int feat_execute(const cmd_t *c, feat_result_t *r)
 		rc = task_prepare_desk_voice(&g_app.cfg, c, r);
 	else if (!strcmp(c->flow, "task") && !strcmp(c->action, "start_stream"))
 		rc = stream_start(&g_app.cfg, "task", c, r);
+	else if (!strcmp(c->flow, "task") && !strcmp(c->action, "stop_stream"))
+		rc = stream_stop(&g_app.cfg, r);
 	else if (!strcmp(c->flow, "task") && !strcmp(c->action, "start_record"))
 		rc = record_start(&g_app.cfg, "task", c, r);
 	else if (!strcmp(c->flow, "task") && !strcmp(c->action, "stop_record"))

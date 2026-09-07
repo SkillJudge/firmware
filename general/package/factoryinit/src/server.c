@@ -75,6 +75,7 @@ int main() {
             char eth_mac[64] = {0};
             char wifi_mac[64] = {0};
             char battery[16] = {0};
+            char wifi_rssi[16] = {0};
 
             // 全部初始化为 null
             strcpy(ver, "null");
@@ -85,6 +86,7 @@ int main() {
             strcpy(eth_mac, "null");
             strcpy(wifi_mac, "null");
             strcpy(battery, "null");
+            strcpy(wifi_rssi, "null");
 
             // 读取版本
             get_cmd_output("cat /etc/version 2>/dev/null", ver, sizeof(ver));
@@ -110,9 +112,14 @@ int main() {
             // 读取电量百分比（读不到保持 null）
             get_cmd_output("sh /root/encoder/battery.sh read 2>/dev/null", battery, sizeof(battery));
 
+            // 读取 WiFi 信号强度（RSSI，dBm）：wpa_cli status 输出 "rssi=-45"；
+            // 未连接/无 WiFi 模块时无 rssi 行，保持 null。
+            // 固件带 wireless_tools + wpa_supplicant_cli（无 iw 命令）。
+            get_cmd_output("wpa_cli -i wlan0 status 2>/dev/null | awk -F= '/^rssi=/{print $2}'", wifi_rssi, sizeof(wifi_rssi));
+
             // 拼接协议（严格格式）
             snprintf(resp_buf, sizeof(resp_buf),
-                "DEVICEID=%s|VER=%s|IP=%s|WIFI_IP=%s|IPCNUM=%s|MAC=%s|WIFI_MAC=%s|BATTERY=%s",
+                "DEVICEID=%s|VER=%s|IP=%s|WIFI_IP=%s|IPCNUM=%s|MAC=%s|WIFI_MAC=%s|BATTERY=%s|WIFI_RSSI=%s",
                 deviceid,
                 ver,
                 eth_ip,
@@ -120,7 +127,8 @@ int main() {
                 ipnum,
                 eth_mac,
                 wifi_mac,
-                battery
+                battery,
+                wifi_rssi
             );
 
             // 发送

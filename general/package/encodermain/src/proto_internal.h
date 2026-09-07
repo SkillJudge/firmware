@@ -25,6 +25,7 @@ typedef enum {
 	ENCM_CMD_STREAM_STOP,           /* stream/stop_stream/stopStream */
 	ENCM_CMD_TASK_PREPARE_DESK_VOICE, /* task/prepare_desk_recognition_voice/... */
 	ENCM_CMD_TASK_STREAM_START,     /* task/start_stream/startStream */
+	ENCM_CMD_TASK_STREAM_STOP,      /* task/stop_stream/stopStream */
 	ENCM_CMD_TASK_RECORD_START,     /* task/start_record/startRecord */
 	ENCM_CMD_TASK_RECORD_STOP,      /* task/stop_record/stopRecord */
 	ENCM_CMD_TASK_RESET,            /* task/reset_encoder/resetEncoder */
