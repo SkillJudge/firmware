@@ -40,7 +40,7 @@ typedef enum sample_rc_e
 	SAMPLE_RC_FIXQP
 }SAMPLE_RC_E;
 
-/// ²¶»ñ·Ö±æÂÊÀàÐÍ
+/// ï¿½ï¿½ï¿½ï¿½Ö±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 enum capture_size_t {
 	CAPTURE_SIZE_D1,		///< 720*576(PAL)	720*480(NTSC)
 	CAPTURE_SIZE_HD1,		///< 352*576(PAL)	352*480(NTSC)
@@ -51,7 +51,7 @@ enum capture_size_t {
 	CAPTURE_SIZE_QVGA,		///< 320*240(PAL)	320*240(NTSC)
 	CAPTURE_SIZE_SVCD,		///< 480*480(PAL)	480*480(NTSC)
 	CAPTURE_SIZE_QQVGA,		///< 160*128(PAL)	160*128(NTSC)
-	CAPTURE_SIZE_NR = 9,	///< µÈÁÙÊ±´¦ÀíµÈµ×²ãÒ»ÆðÐÞ¸Ä
+	CAPTURE_SIZE_NR = 9,	///< ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½ï¿½Èµ×²ï¿½Ò»ï¿½ï¿½ï¿½Þ¸ï¿½
 	CAPTURE_SIZE_ND1 = 9,   ///< 240*192
 	CAPTURE_SIZE_650TVL,    ///< 928*576
 	CAPTURE_SIZE_720P,      ///< 1280*720
@@ -62,16 +62,16 @@ enum capture_size_t {
 	CAPTURE_SIZE_2_5M,      ///< 1872*1408
 	CAPTURE_SIZE_3M,        ///< 2048*1536
 	CAPTURE_SIZE_5M,        ///< 3744*1408
-	CAPTURE_SIZE_EXT_NR =19,    ///< Ã¶¾ÙµÄÍ¼ÐÎ´óÐ¡ÖÖÀàµÄÊýÄ¿¡£
+	CAPTURE_SIZE_EXT_NR =19,    ///< Ã¶ï¿½Ùµï¿½Í¼ï¿½Î´ï¿½Ð¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¿ï¿½ï¿½
 	CAPTURE_SIZE_1080N = 19,     ///< 960*1080
 	CAPTURE_SIZE_4M,        ///< 2592*1520
-	CAPTURE_SIZE_6M,		///< 3072¡Á2048
-	CAPTURE_SIZE_8M,		///< 3264¡Á2448
+	CAPTURE_SIZE_6M,		///< 3072ï¿½ï¿½2048
+	CAPTURE_SIZE_8M,		///< 3264ï¿½ï¿½2448
 	CAPTURE_SIZE_12M,		///< 4000*3000
-	CAPTURE_SIZE_4K,		///< 4096 * 2160Í¨ÓÃ/3840*2160º£Ë¼
-	CAPTURE_SIZE_EXT_V2_NR=25,    ///< Ã¶¾ÙµÄÍ¼ÐÎ´óÐ¡ÖÖÀàµÄÊýÄ¿¡£
+	CAPTURE_SIZE_4K,		///< 4096 * 2160Í¨ï¿½ï¿½/3840*2160ï¿½ï¿½Ë¼
+	CAPTURE_SIZE_EXT_V2_NR=25,    ///< Ã¶ï¿½Ùµï¿½Í¼ï¿½Î´ï¿½Ð¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä¿ï¿½ï¿½
 	CAPTURE_SIZE_720N = 25,  //  640*720
-	CAPTURE_SIZE_RES1,       // 0*0 ÈßÓà
+	CAPTURE_SIZE_RES1,       // 0*0 ï¿½ï¿½ï¿½ï¿½
 	CAPTRUE_SIZE_RES2,       // 0*0
 	CAPTURE_SIZE_RES3,       // 0*0
 	CAPTURE_SIZE_RES4,       // 0*0

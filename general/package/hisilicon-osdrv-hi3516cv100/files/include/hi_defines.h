@@ -61,7 +61,7 @@ extern "C"{
 static inline void InvalidateDcache(unsigned long addr, unsigned long len)
 {
     unsigned long end;
-    //TODO: cacheË¢ÐÂÐèÒªÖØÐ´
+    //TODO: cacheË¢ï¿½ï¿½ï¿½ï¿½Òªï¿½ï¿½Ð´
     return ;
     
     addr &= LINE_BASE_MASK;
@@ -80,7 +80,7 @@ static inline  void FlushDcache(unsigned long addr, unsigned long len)
 {
     unsigned long end;
 
-    //TODO: cacheË¢ÐÂÐèÒªÖØÐ´
+    //TODO: cacheË¢ï¿½ï¿½ï¿½ï¿½Òªï¿½ï¿½Ð´
     return ;
 
     addr &= LINE_BASE_MASK;
@@ -120,7 +120,7 @@ static inline  void FlushDcache(unsigned long addr, unsigned long len)
 #define JPEGE_MAX_HEIGHT   8192
 #define JPEGE_MIN_WIDTH    64
 #define JPEGE_MIN_HEIGHT   64
-#define VENC_MAX_ROI_NUM   8               /* ×î´óÖ§³Ö8¸öROIÇøÓò */
+#define VENC_MAX_ROI_NUM   8               /* ï¿½ï¿½ï¿½Ö§ï¿½ï¿½8ï¿½ï¿½ROIï¿½ï¿½ï¿½ï¿½ */
 #define H264E_MIN_HW_INDEX 0
 #define H264E_MAX_HW_INDEX 5
 #define H264E_MIN_VW_INDEX 0
@@ -154,10 +154,10 @@ static inline  void FlushDcache(unsigned long addr, unsigned long len)
 
 #define VIU_CHNID_DEV_FACTOR    2
 
-/* 3518±¾²»Ö§³Ö¼¶Áª£¬ÕâÀïºê¶¨ÒåÕâÐ©ÐÅÏ¢£¬Ö»ÊÇÎªÁË±àÒëÍ¨¹ý */
+/* 3518ï¿½ï¿½ï¿½ï¿½Ö§ï¿½Ö¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ê¶¨ï¿½ï¿½ï¿½ï¿½Ð©ï¿½ï¿½Ï¢ï¿½ï¿½Ö»ï¿½ï¿½Îªï¿½Ë±ï¿½ï¿½ï¿½Í¨ï¿½ï¿½ */
 #define VIU_MAX_CAS_CHN_NUM     2
-#define VIU_SUB_CHN_START       16    /* ¶¨Òå´ÎÍ¨µÀÆðÊ¼ºê*/
-#define VIU_CAS_CHN_START       32    /* ¶¨Òå¼¶ÁªÍ¨µÀÆðÊ¼ºê*/
+#define VIU_SUB_CHN_START       16    /* ï¿½ï¿½ï¿½ï¿½ï¿½Í¨ï¿½ï¿½ï¿½ï¿½Ê¼ï¿½ï¿½*/
+#define VIU_CAS_CHN_START       32    /* ï¿½ï¿½ï¿½å¼¶ï¿½ï¿½Í¨ï¿½ï¿½ï¿½ï¿½Ê¼ï¿½ï¿½*/
 
 /* max number of VBI region*/
 #define VIU_MAX_VBI_NUM         2

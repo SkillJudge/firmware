@@ -74,10 +74,10 @@ typedef enum hiTDE2_COLOR_FMT_E
     TDE2_COLOR_FMT_CLUT8,               /**CLUT8 */
     TDE2_COLOR_FMT_ACLUT44,             /**CLUT44 */
     TDE2_COLOR_FMT_ACLUT88,             /**CLUT88 */
-    TDE2_COLOR_FMT_A1,                  /**<alpha format£¬1bit */
-    TDE2_COLOR_FMT_A8,                  /**<alpha format£¬8bit */
-    TDE2_COLOR_FMT_YCbCr888,            /**<YUV packet format£¬no alpha*/
-    TDE2_COLOR_FMT_AYCbCr8888,          /**<YUV packet format£¬with alpha*/
+    TDE2_COLOR_FMT_A1,                  /**<alpha formatï¿½ï¿½1bit */
+    TDE2_COLOR_FMT_A8,                  /**<alpha formatï¿½ï¿½8bit */
+    TDE2_COLOR_FMT_YCbCr888,            /**<YUV packet formatï¿½ï¿½no alpha*/
+    TDE2_COLOR_FMT_AYCbCr8888,          /**<YUV packet formatï¿½ï¿½with alpha*/
     TDE2_COLOR_FMT_YCbCr422,            /**<YUV packet422 format */
     TDE2_COLOR_FMT_byte,                /**<byte*/
     TDE2_COLOR_FMT_halfword,            /**<halfword*/
@@ -469,7 +469,7 @@ typedef struct hiTDE2_CSC_OPT_S
     HI_U32 u32OCSCParamAddr;	/**OCSC parameter address. The address must be 128-bit aligned.*/
 }TDE2_CSC_OPT_S;
 
-/**  the attributes of a TDE operationå */
+/**  the attributes of a TDE operationï¿½ */
 typedef struct hiTDE2_OPT_S
 {
     /* Logical operation type */

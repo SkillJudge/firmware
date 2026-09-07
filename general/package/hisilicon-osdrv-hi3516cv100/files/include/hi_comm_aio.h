@@ -255,9 +255,9 @@ typedef enum hiAUDIO_AEC_MODE_E
 /**Defines the configure parameters of ALC.*/
 typedef struct hiAI_ALC_CONFIG_S
 {
-    HI_S32 s32MaxLev;         /*s32MaxLev£º[-23dBm0, -4dBm0]¡£default: -4dBm0*/
-    HI_S32 s32MinLev;         /*s32MinLev£º [-23dBm0, -4dBm0]¡£default: -16dBm0*/
-    HI_U32 u32MaxGain;        /*u32MaxGain£º[3dB,12dB]¡£default: 12dB*/
+    HI_S32 s32MaxLev;         /*s32MaxLevï¿½ï¿½[-23dBm0, -4dBm0]ï¿½ï¿½default: -4dBm0*/
+    HI_S32 s32MinLev;         /*s32MinLevï¿½ï¿½ [-23dBm0, -4dBm0]ï¿½ï¿½default: -16dBm0*/
+    HI_U32 u32MaxGain;        /*u32MaxGainï¿½ï¿½[3dB,12dB]ï¿½ï¿½default: 12dB*/
 } AI_ALC_CONFIG_S;
 
 /**Defines the configure parameters of AEC.*/
@@ -298,10 +298,10 @@ typedef struct hiAI_VQE_CONFIG_S
     HI_S32              bAecOpen;     
     HI_S32              bAnrOpen;
     HI_S32              bAlcOpen;
-    HI_S32              s32SampleRate;  /* Sample Rate£º8KHz/11.025K/12K/16KHz¡£default: 8KHz*/
-    HI_S32              s32FrameSample; /* VQE frame length£º
-                                         sample rate 8KHz:  VQE frame length: 80/160/240/320/400/480£¬ default: 160;
-                                         sample rate 11.025K/12K/16KHz: VQE frame length: 160/320/480/960£¬ default: 160 */
+    HI_S32              s32SampleRate;  /* Sample Rateï¿½ï¿½8KHz/11.025K/12K/16KHzï¿½ï¿½default: 8KHz*/
+    HI_S32              s32FrameSample; /* VQE frame lengthï¿½ï¿½
+                                         sample rate 8KHz:  VQE frame length: 80/160/240/320/400/480ï¿½ï¿½ default: 160;
+                                         sample rate 11.025K/12K/16KHz: VQE frame length: 160/320/480/960ï¿½ï¿½ default: 160 */
     AI_AEC_CONFIG_S stAecCfg;
     AI_ANR_CONFIG_S stAnrCfg;
     AI_ALC_CONFIG_S stAlcCfg;
@@ -325,7 +325,7 @@ typedef enum hiAUDIO_VQE3_AEC_MODE_E
 /**Defines the configure parameters of AGC.*/
 typedef struct hiAUDIO_VQE3_AGC_CONFIG_S
 {
-    HI_BOOL bUsrMode;          /* mode 0: auto£¬mode 1: manual.*/
+    HI_BOOL bUsrMode;          /* mode 0: autoï¿½ï¿½mode 1: manual.*/
 
     HI_S8 s8TargetLevel;       /* target voltage level, range: [-40, -1]dB */
     HI_S8 s8NoiseFloor;        /* noise floor, range: [-65, -20]dB */
@@ -352,7 +352,7 @@ typedef struct hiAI_VQE3_AEC_CONFIG_S
 /**Defines the configure parameters of ANR.*/
 typedef struct hiAUDIO_VQE3_ANR_CONFIG_S
 {
-    HI_BOOL bUsrMode;   /* mode 0: auto£¬mode 1: manual.*/
+    HI_BOOL bUsrMode;   /* mode 0: autoï¿½ï¿½mode 1: manual.*/
 
     HI_S16 s16NrIntensity;       /* noise reduce intensity, range: [0, 25] */
     HI_S16 s16NoiseDbThr;        /* noise threshold, range: [30, 60] */
@@ -371,7 +371,7 @@ typedef struct hiAUDIO_VQE3_HPF_CONFIG_S
 
 typedef struct hiAI_VQE3_RNR_CONFIG_S
 {
-    HI_BOOL bUsrMode;                /* mode 0: auto£¬mode 1: mannual.*/
+    HI_BOOL bUsrMode;                /* mode 0: autoï¿½ï¿½mode 1: mannual.*/
 
     HI_S32  s32NrMode;               /*mode 0: floor noise; 1:ambient noise */
 
@@ -404,9 +404,9 @@ typedef struct hiAI_VQE3_CONFIG_S
     HI_S32              bAgcOpen;
     HI_S32              bEqOpen;
 
-	HI_S32              s32InSampleRate;  /* Sample Rate£º8KHz-48KHz¡£*/
-    HI_S32              s32WorkSampleRate;  /* Sample Rate£º8KHz/16KHz/48KHz¡£default: 8KHz*/
-    HI_S32              s32FrameSample; /* VQE frame length£º 80-4096 */
+	HI_S32              s32InSampleRate;  /* Sample Rateï¿½ï¿½8KHz-48KHzï¿½ï¿½*/
+    HI_S32              s32WorkSampleRate;  /* Sample Rateï¿½ï¿½8KHz/16KHz/48KHzï¿½ï¿½default: 8KHz*/
+    HI_S32              s32FrameSample; /* VQE frame lengthï¿½ï¿½ 80-4096 */
     VQE3_WORKSTATE_E     enWorkstate;
 
                                        
@@ -424,9 +424,9 @@ typedef struct hiAO_VQE3_CONFIG_S
     HI_S32              bAgcOpen;
     HI_S32              bEqOpen;
     
-	HI_S32              s32InSampleRate;  /* Sample Rate£º8KHz-48KHz¡£*/
-    HI_S32              s32WorkSampleRate;  /* Sample Rate£º8KHz/16KHz/48KHz¡£default: 8KHz*/
-    HI_S32              s32FrameSample;     /* VQE frame length£º 80-4096 */
+	HI_S32              s32InSampleRate;  /* Sample Rateï¿½ï¿½8KHz-48KHzï¿½ï¿½*/
+    HI_S32              s32WorkSampleRate;  /* Sample Rateï¿½ï¿½8KHz/16KHz/48KHzï¿½ï¿½default: 8KHz*/
+    HI_S32              s32FrameSample;     /* VQE frame lengthï¿½ï¿½ 80-4096 */
     VQE3_WORKSTATE_E     enWorkstate;
 
     AUDIO_VQE3_HPF_CONFIG_S stHpfCfg;

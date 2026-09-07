@@ -1,11 +1,32 @@
 # 强制所有 shell 脚本和配置文件使用 LF 换行，
 # 防止 Windows 提交时引入 CRLF 导致设备端 shell 解析失败。
+# 默认所有文本文件 LF（git 自动识别文本/二进制）
+*           text=auto eol=lf
+
+# 显式声明二进制文件，不做换行转换
+*.pcm       binary
+*.bin       binary
+*.img       binary
+*.so        binary
+*.ko        binary
+*.o         binary
+*.a         binary
+*.gz        binary
+*.zip       binary
+*.jpg       binary
+*.png       binary
+*.wav       binary
+*.mp3       binary
+
+# Shell 脚本与配置（兜底，覆盖无扩展名脚本）
 *.sh        text eol=lf
+*.script    text eol=lf
 *.conf      text eol=lf
 *.init      text eol=lf
 *.mk        text eol=lf
 *.c         text eol=lf
 *.h         text eol=lf
+*.py        text eol=lf
 S*          text eol=lf
 sysupgrade  text eol=lf
 ftp_upgrade text eol=lf

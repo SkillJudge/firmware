@@ -198,7 +198,7 @@ typedef struct HI_VPSS_CHN_MODE_S
     VPSS_CHN_MODE_E  enChnMode;   /*Vpss channel's work mode*/
     HI_U32 u32Width;              /*Width of target image*/
     HI_U32 u32Height;             /*Height of target image*/
-    HI_BOOL bDouble;              /*Field-frame transfer£¬only valid for VPSS_PRE0_CHN*/
+    HI_BOOL bDouble;              /*Field-frame transferï¿½ï¿½only valid for VPSS_PRE0_CHN*/
     PIXEL_FORMAT_E  enPixelFormat;/*Pixel format of target image*/
 }VPSS_CHN_MODE_S;
 

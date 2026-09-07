@@ -446,7 +446,7 @@ typedef struct hiVI_FlASH_CONFIG_S
 {
     VI_FLASH_MODE_E enFlashMode;	    /* Flash one time, flash frequently*/
 
-    HI_U32 u32StartTime;	            /* Flash start time£¬unit: sensor pix clk.*/
+    HI_U32 u32StartTime;	            /* Flash start timeï¿½ï¿½unit: sensor pix clk.*/
     HI_U32 u32Duration;                 /* Flash high duration, unit: sensor pix clk.*/
     HI_U32 u32CapFrmIndex;              /* Set which vframe will be bFlashed after flashing, default is 0. */
     HI_U32 u32Interval;                 /* Flash frequently interval, unit: frame*/

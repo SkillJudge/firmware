@@ -120,8 +120,8 @@ typedef struct hiVENC_PACK_S
     HI_U32   u32Len[2];             /*the length of stream*/
     
     HI_U64   u64PTS;                /*PTS*/
-    HI_BOOL  bFieldEnd;             /*field end£¿*/
-    HI_BOOL  bFrameEnd;             /*frame end£¿*/
+    HI_BOOL  bFieldEnd;             /*field endï¿½ï¿½*/
+    HI_BOOL  bFrameEnd;             /*frame endï¿½ï¿½*/
     
     VENC_DATA_TYPE_U  DataType;     /*the type of stream*/
     HI_U32   u32Offset;
@@ -129,11 +129,11 @@ typedef struct hiVENC_PACK_S
 
 typedef enum hiH264E_REF_TYPE_E
 {
-    BASE_IDRSLICE = 0,                  //base²ãÖÐµÄIDRÖ¡
-    BASE_PSLICE_REFBYBASE,              //base²ãÖÐµÄPÖ¡£¬ÓÃÓÚbase²ãÖÐÆäËûÖ¡µÄ²Î¿¼
-    BASE_PSLICE_REFBYENHANCE,           //base²ãÖÐµÄPÖ¡£¬ÓÃÓÚenhance²ãÖÐµÄÖ¡µÄ²Î¿¼
-    ENHANCE_PSLICE_REFBYENHANCE,        //enhance²ãÖÐµÄPÖ¡£¬ÓÃÓÚenhance²ãÖÐÆäËûÖ¡µÄ²Î¿¼
-    ENHANCE_PSLICE_NOTFORREF,           //enhance²ãÖÐµÄPÖ¡£¬²»ÓÃÓÚ²Î¿¼
+    BASE_IDRSLICE = 0,                  //baseï¿½ï¿½ï¿½Ðµï¿½IDRÖ¡
+    BASE_PSLICE_REFBYBASE,              //baseï¿½ï¿½ï¿½Ðµï¿½PÖ¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½baseï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½Ä²Î¿ï¿½
+    BASE_PSLICE_REFBYENHANCE,           //baseï¿½ï¿½ï¿½Ðµï¿½PÖ¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½enhanceï¿½ï¿½ï¿½Ðµï¿½Ö¡ï¿½Ä²Î¿ï¿½
+    ENHANCE_PSLICE_REFBYENHANCE,        //enhanceï¿½ï¿½ï¿½Ðµï¿½PÖ¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½enhanceï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ö¡ï¿½Ä²Î¿ï¿½
+    ENHANCE_PSLICE_NOTFORREF,           //enhanceï¿½ï¿½ï¿½Ðµï¿½PÖ¡ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú²Î¿ï¿½
     ENHANCE_PSLICE_BUTT
 } H264E_REF_TYPE_E;
 
@@ -282,8 +282,8 @@ typedef struct hiVENC_H264_CAPABILITY_S
 {
     HI_U8   u8Profile       ;   /*0:baseline 1:mainprofile  2:high profile*/
     HI_U8   u8Level         ;   /*eg: 22 denote level2.2*/
-    HI_U8   u8BaseAttr      ;   /*bit0¡«bit5 denote MBAFF, PAFF£¬B SLICE£¬FMO£¬ ASO£¬PARTITION  */
-    HI_U8   u8ViFormat      ;   /*format£¬ bit.0: PAL(25)£¬bit.1:NTSC(30)  */
+    HI_U8   u8BaseAttr      ;   /*bit0ï¿½ï¿½bit5 denote MBAFF, PAFFï¿½ï¿½B SLICEï¿½ï¿½FMOï¿½ï¿½ ASOï¿½ï¿½PARTITION  */
+    HI_U8   u8ViFormat      ;   /*formatï¿½ï¿½ bit.0: PAL(25)ï¿½ï¿½bit.1:NTSC(30)  */
     HI_U16  u16MaxWInMb     ;   /*the max width of input picture*/
     HI_U16  u16MaxHInMb     ;   /*the max height of input picture*/
     HI_U16  u16MaxCifNum    ;   /*the max coding capability */
@@ -297,7 +297,7 @@ typedef struct hiVENC_H264_CAPABILITY_S
 typedef struct hiVENC_JPEG_CAPABILITY_S
 {
     HI_U8 u8Profile         ;   /*0:baseline 1:extened profile  2:loseless profile 3:hierarchical profile*/
-    HI_U8 u8ViFormat        ;   /*format£¬ bit.0: PAL(25)£¬bit.1:NTSC(30)  */
+    HI_U8 u8ViFormat        ;   /*formatï¿½ï¿½ bit.0: PAL(25)ï¿½ï¿½bit.1:NTSC(30)  */
     HI_U16 u16MaxWInMb      ;   /*the max width of input picture*/
     HI_U16 u16MaxHInMb      ;   /*the max height of input picture*/
     HI_U16 u16MaxCifNum     ;   /*the max coding capability */

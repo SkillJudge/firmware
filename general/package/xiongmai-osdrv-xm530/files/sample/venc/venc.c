@@ -738,14 +738,14 @@ XM_S32 SAMPLE_VENC_400W_CLASSIC(int seconds)
 	}
 
     ViChn = 0;
-    s32Ret = ViChnConfig(ViChn, VIDEO_ENCODING_MODE_PAL,CAPTURE_SIZE_4M);//´Ë´¦´ýÐÞ¸Ä2560*1440
+    s32Ret = ViChnConfig(ViChn, VIDEO_ENCODING_MODE_PAL,CAPTURE_SIZE_4M);//ï¿½Ë´ï¿½ï¿½ï¿½ï¿½Þ¸ï¿½2560*1440
     if (XM_SUCCESS != s32Ret)
     {
         SAMPLE_PRT("Start ViChn %d failed!\n", ViChn);
         return XM_FAILURE;
     }
     ViChn = 1;
-    s32Ret = ViChnConfigEx(ViChn, VIDEO_ENCODING_MODE_PAL,CAPTURE_SIZE_D1);//´Ë´¦´ýÐÞ¸Ä2560*1440
+    s32Ret = ViChnConfigEx(ViChn, VIDEO_ENCODING_MODE_PAL,CAPTURE_SIZE_D1);//ï¿½Ë´ï¿½ï¿½ï¿½ï¿½Þ¸ï¿½2560*1440
     if (XM_SUCCESS != s32Ret)
     {
         SAMPLE_PRT("Start ViChn %d failed!\n", ViChn);
@@ -753,7 +753,7 @@ XM_S32 SAMPLE_VENC_400W_CLASSIC(int seconds)
     }
 
     VencChn = 0;
-    s32Ret = COMM_VENC_Start(VencChn, PT_H264,VIDEO_ENCODING_MODE_PAL,CAPTURE_SIZE_4M,SAMPLE_RC_CBR);//´Ë´¦´ýÐÞ¸Ä2560*1440
+    s32Ret = COMM_VENC_Start(VencChn, PT_H264,VIDEO_ENCODING_MODE_PAL,CAPTURE_SIZE_4M,SAMPLE_RC_CBR);//ï¿½Ë´ï¿½ï¿½ï¿½ï¿½Þ¸ï¿½2560*1440
     if (XM_SUCCESS != s32Ret)
     {
         SAMPLE_PRT("Start VencChn %d failed!\n", VencChn);
@@ -761,7 +761,7 @@ XM_S32 SAMPLE_VENC_400W_CLASSIC(int seconds)
     }
 	s32Cnt += 1;
 	VencChn = 1;
-	s32Ret = COMM_VENC_Start(VencChn, PT_H264,VIDEO_ENCODING_MODE_PAL,CAPTURE_SIZE_D1,SAMPLE_RC_CBR);//´Ë´¦´ýÐÞ¸Ä2560*1440
+	s32Ret = COMM_VENC_Start(VencChn, PT_H264,VIDEO_ENCODING_MODE_PAL,CAPTURE_SIZE_D1,SAMPLE_RC_CBR);//ï¿½Ë´ï¿½ï¿½ï¿½ï¿½Þ¸ï¿½2560*1440
     if (XM_SUCCESS != s32Ret)
     {
         SAMPLE_PRT("Start VencChn %d failed!\n", VencChn);

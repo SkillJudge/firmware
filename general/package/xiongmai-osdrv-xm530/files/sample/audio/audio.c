@@ -158,7 +158,7 @@ XM_S32  SAMPLE_AUDIO_AdecAo(void)
 	XM_U8 *pAudioStream = NULL;
 	FILE *fp = NULL;
 
-	s32Ret = XM_MPI_SYS_Init(); //调用XM_MPI_SYS_Init后不要再调用XM_MPI_AUDIO_Init
+	s32Ret = XM_MPI_SYS_Init(); //锟斤拷锟斤拷XM_MPI_SYS_Init锟斤拷要锟劫碉拷锟斤拷XM_MPI_AUDIO_Init
 	if(s32Ret != XM_SUCCESS)
 	{
 		SAMPLE_PRT("XM_MPI_SYS_Init err:%d\n",s32Ret);
@@ -268,7 +268,7 @@ XM_S32 SAMPLE_AUDIO_AiAenc(void)
 	pthread_t gs_AencPid;
 	SAMPLE_AENC_GETSTREAM_PARA_S gs_stPara;
 
-	s32Ret = XM_MPI_SYS_Init(); //调用XM_MPI_SYS_Init后不要再调用XM_MPI_AUDIO_Init
+	s32Ret = XM_MPI_SYS_Init(); //锟斤拷锟斤拷XM_MPI_SYS_Init锟斤拷要锟劫碉拷锟斤拷XM_MPI_AUDIO_Init
 	if(s32Ret != XM_SUCCESS)
 	{
 		SAMPLE_PRT("XM_MPI_SYS_Init err:%d\n",s32Ret);

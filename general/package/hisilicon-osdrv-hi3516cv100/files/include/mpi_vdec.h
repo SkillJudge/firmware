@@ -20,7 +20,7 @@
     Modification: modified HI_MPI_VDEC_GetCapability interface
   4.Date        : 2008/7/19
     Author      : c55300
-    Modification: CR20080716007£¬HI_MPI_VDEC_ResetChn() is added.
+    Modification: CR20080716007ï¿½ï¿½HI_MPI_VDEC_ResetChn() is added.
 ******************************************************************************/
 #ifndef  __MPI_VDEC_H__
 #define  __MPI_VDEC_H__

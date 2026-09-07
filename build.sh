@@ -62,10 +62,29 @@ fi
 echo "--> 步骤 3: 将新生成的精简配置移至板级目录并重命名为 my_defconfig ..."
 mkdir -p ../br-ext-chip-goke/configs/
 cp ./openipc_defconfig ../br-ext-chip-goke/configs/my_defconfig
-
-# 步骤 4: 回到顶层目录，调用 make BOARD=my clean all 编译
-echo "--> 步骤 4: 返回根目录，开始全量清洗并编译板型 [my] ..."
 cd ..
+
+# 步骤 3.5: 修复所有文本文件的 CRLF 换行符为 LF
+# 背景：Windows 提交的文件可能带 CRLF，设备端 ash/busybox 解析时会因 \r 报错
+# （如 default.script 解析失败导致 udhcpc 拿不到 IP）。
+# 此处对 general/(overlay+packages) 和 br-ext-chip-*/ 下的所有文本文件强制转 LF。
+echo "--> 步骤 3.5: 检查并修复文本文件 CRLF 换行符..."
+CRLF_DIRS="./general ./br-ext-chip-*"
+CRLF_LIST=$(mktemp)
+# -I 跳过二进制，-l 仅列出含 CR 的文件；2>/dev/null 抑制 "binary file" 提示
+find $CRLF_DIRS -type f 2>/dev/null -exec grep -Il $'\r' {} + 2>/dev/null > "$CRLF_LIST" || true
+CRLF_COUNT=$(wc -l < "$CRLF_LIST")
+if [ "$CRLF_COUNT" -gt 0 ]; then
+    echo "   发现 ${CRLF_COUNT} 个含 CRLF 的文本文件，转换为 LF..."
+    xargs -r -a "$CRLF_LIST" sed -i 's/\r$//'
+    echo "   ✓ 已修复 ${CRLF_COUNT} 个文件"
+else
+    echo "   ✓ 所有文本文件已是 LF 换行，无需修复"
+fi
+rm -f "$CRLF_LIST"
+
+# 步骤 4: 调用 make BOARD=my clean all 编译（已在顶层目录）
+echo "--> 步骤 4: 开始全量清洗并编译板型 [my] ..."
 
 # 执行终极编译
 make BOARD=my clean all
