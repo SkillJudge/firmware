@@ -12,6 +12,16 @@ echo "=================================================="
 echo "开始执行 OpenIPC 音频配置更新与固件编译流程 (带安全校验)"
 echo "=================================================="
 
+# 编译前读取固件版本号（来自 general/overlay/etc/version）
+VERSION_FILE="./general/overlay/etc/version"
+if [ -f "${VERSION_FILE}" ]; then
+    FW_VERSION=$(cat "${VERSION_FILE}" | tr -d '[:space:]')
+else
+    echo "❌ 错误: 未找到版本文件 ${VERSION_FILE}"
+    exit 1
+fi
+echo "--> 固件版本号: ${FW_VERSION}"
+
 # 1. 检查当前目录下是否存在 myconfig 文件
 if [ ! -f "./myconfig" ]; then
     echo "❌ 错误: 当前目录下未找到 'myconfig' 文件，请检查输入！"
@@ -60,7 +70,22 @@ cd ..
 # 执行终极编译
 make BOARD=my clean all
 
+# 编译结束后，将版本号嵌入固件文件名
+echo "--> 步骤 5: 将版本号嵌入固件文件名 ..."
+ORIG_IMG=$(ls -t ./output/images/openipc-*.bin 2>/dev/null | head -1)
+if [ -n "${ORIG_IMG}" ] && [ -f "${ORIG_IMG}" ]; then
+    IMG_BASENAME=$(basename "${ORIG_IMG}")
+    IMG_NAME="${IMG_BASENAME%.bin}"
+    VERSIONED_IMG="./output/images/${IMG_NAME}-${FW_VERSION}.bin"
+    cp -f "${ORIG_IMG}" "${VERSIONED_IMG}"
+    echo "   ✓ 已生成带版本号的固件: ${VERSIONED_IMG}"
+else
+    echo "   ⚠️  未找到 output/images/openipc-*.bin，跳过版本重命名"
+fi
+
 echo "=================================================="
 echo "🎉 恭喜！OpenIPC [my] 板型固件编译完成！"
+echo "固件版本号: ${FW_VERSION}"
 echo "固件产物存放在 ./output/images/ 目录下。"
+echo "带版本号的固件: ${VERSIONED_IMG:-N/A}"
 echo "=================================================="
