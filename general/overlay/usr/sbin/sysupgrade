@@ -289,7 +289,10 @@ reboot_system() {
 		exit 1
 	else
 		echo_c 37 "\nUnconditional reboot"
-		busybox reboot -d 1 -f
+		# 优先用 busybox reboot；若 rootfs 已被 flashcp 覆盖导致 busybox 读失败
+		# （drop_caches 清掉页缓存后需从新 rootfs 重读，偶发 I/O error），
+		# 则用 sysrq 直接触发内核重启，不依赖任何 flash 读取。
+		busybox reboot -d 1 -f || echo b > /proc/sysrq-trigger
 	fi
 }
 

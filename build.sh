@@ -111,8 +111,8 @@ for pat in "openipc.*.tgz" "uImage.*" "rootfs.squashfs.*"; do
         [ -f "$f" ] || continue
         fname=$(basename "$f")
         vname=$(append_version "$fname" "$FW_VERSION")
-        cp -f "$f" "./output/images/$vname"
-        echo "   ✓ 已生成带版本号的固件: $vname"
+        mv -f "$f" "./output/images/$vname"
+        echo "   ✓ 已重命名固件: $vname"
         VERSIONED_COUNT=$((VERSIONED_COUNT + 1))
     done
 done
