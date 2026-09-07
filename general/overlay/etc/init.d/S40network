@@ -14,7 +14,7 @@
 
 CONFIG_FILE="/etc/wifi.conf"
 WLAN_WAIT_SEC=8
-ETH_CARRIER_WAIT=2
+ETH_CARRIER_WAIT=5
 QUICK_WATCHDOG_SEC=60
 QUICK_RETRY_INT=5
 WATCHDOG_PIDFILE="/tmp/wifi_quick_watchdog.pid"
@@ -130,7 +130,9 @@ start() {
     echo "Starting network..."
     ifup lo
 
-    # 检测 eth0 carrier（最多 2s）
+    # 先拉起 eth0（DOWN 状态下 carrier 不可读），再检测链路
+    ifconfig eth0 up 2>/dev/null
+    # 检测 eth0 carrier（最多 ETH_CARRIER_WAIT 秒，PHY 协商需要时间）
     eth_cable=0
     i=0
     while [ "$i" -lt "$ETH_CARRIER_WAIT" ]; do
