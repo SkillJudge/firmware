@@ -54,7 +54,20 @@ case "$1" in
 		if [ -x /usr/sbin/avahi-autoipd ]; then
 			/usr/sbin/avahi-autoipd -c $interface || /usr/sbin/avahi-autoipd -wD $interface --no-chroot
 		fi
-		/sbin/ifconfig $interface $(fw_printenv -n ipaddr || echo -n 192.168.1.10) netmask $(fw_printenv -n netmask || echo -n 255.255.255.0) up
+		# 生产场景下不应给 fallback 静态 IP（192.168.1.10），
+		# 那会造成"有 IP 但无网络"的假在线，干扰上层网络就绪判定。
+		# env 有 ipaddr 则用它（维护用途），否则保持 0.0.0.0 让 encalertd 判定网络未就绪。
+		fallback_ip=$(fw_printenv -n ipaddr 2>/dev/null)
+		fallback_nm=$(fw_printenv -n netmask 2>/dev/null)
+		if [ -n "$fallback_ip" ]; then
+			[ -n "$fallback_nm" ] || fallback_nm=255.255.255.0
+			/sbin/ifconfig $interface $fallback_ip netmask $fallback_nm up
+			echo "[udhcpc] $interface: lease failed, using env fallback $fallback_ip"
+		else
+			# 无 env fallback → 保持接口 up 但无 IP，让上层判定未就绪
+			/sbin/ifconfig $interface up
+			echo "[udhcpc] $interface: lease failed, no fallback IP (production mode)"
+		fi
 		;;
 
 	renew|bound)

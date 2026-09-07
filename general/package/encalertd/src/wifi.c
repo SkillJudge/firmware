@@ -10,6 +10,9 @@
  *      （现场存在静态 IP 无默认路由的组网；broker 可达即业务在线）
  *
  * 分级恢复（按连续断线轮次自动升级，探测成功后归零）：
+ *   L0  wifi_bringup: 重新加载驱动 + ifup wlan0（仅 iface_missing 时）
+ *       链路：/etc/wifi.conf → /etc/wireless/usb → modprobe
+ *             → ifup wlan0 → wpa_supplicant 从 env 读 SSID/密码连 skilljudge
  *   L1  ifconfig <iface> down/up            接口复位
  *   L2  wpa_cli -i <iface> reassociate      重关联 AP
  *   L3  重启 DHCP（kill udhcpc + 后台重跑） IP 层重建
@@ -119,6 +122,91 @@ static bool ping_ok(const char *ip)
 	return WIFEXITED(st) && WEXITSTATUS(st) == 0;
 }
 
+/* ---------------- L0: 接口缺失时主动拉起 WiFi ----------------
+ *
+ * iface_missing 说明 wlan0 不存在（驱动未加载或硬件复位）。
+ * 此时 L1-L3（ifconfig/wpa_cli/udhcpc）对不存在的接口毫无意义，
+ * 需要 L0 重新加载驱动 + ifup 触发 wpa_supplicant 连接 skilljudge。
+ *
+ * 链路：/etc/wifi.conf (WIFI_DEVICE) → /etc/wireless/usb → modprobe
+ *       → ifup wlan0 → pre-up wpa_passphrase(fw_printenv wlanssid/wlanpass)
+ *       → wpa_supplicant 连 AP
+ * encalertd 不需要自己知道 SSID/密码，flash env 是唯一权威源。
+ */
+#define WIFI_BRINGUP_INTERVAL   60   /* L0 重试间隔，与 WIFI_RECOVER_MIN_INT 对齐 */
+#define WIFI_DEVICE_MAX_LEN     64
+
+/* 前向声明：sh() 和 iface_exists() 定义在后面，L0 先用到 */
+static void sh(const char *fmt, ...);
+static bool iface_exists(const enc_cfg_t *c);
+
+static bool wifi_bringup(const enc_cfg_t *c)
+{
+	char device[WIFI_DEVICE_MAX_LEN] = {0};
+	FILE *f;
+
+	/* 读 /etc/wifi.conf 拿 WIFI_DEVICE（驱动加载脚本需要的参数） */
+	f = fopen("/etc/wifi.conf", "r");
+	if (f) {
+		char line[256];
+		while (fgets(line, sizeof(line), f)) {
+			char *eq = strchr(line, '=');
+			if (!eq) continue;
+			*eq = '\0';
+			/* 去首尾空白 */
+			char *k = line; while (*k == ' ' || *k == '\t') k++;
+			char *ke = k + strlen(k);
+			while (ke > k && (ke[-1] == ' ' || ke[-1] == '\t')) *--ke = '\0';
+			char *v = eq + 1; while (*v == ' ' || *v == '\t') v++;
+			size_t vl = strlen(v);
+			while (vl > 0 && (v[vl-1] == '\n' || v[vl-1] == '\r' ||
+			                  v[vl-1] == ' '  || v[vl-1] == '\t'))
+				v[--vl] = '\0';
+			/* 去掉引号 */
+			if (vl >= 2 && ((v[0] == '\'' && v[vl-1] == '\'') ||
+			                (v[0] == '"'  && v[vl-1] == '"'))) {
+				v++; vl -= 2;
+				v[vl] = '\0';
+			}
+			if (strcmp(k, "WIFI_DEVICE") == 0) {
+				snprintf(device, sizeof(device), "%s", v);
+				break;
+			}
+		}
+		fclose(f);
+	}
+
+	if (device[0] == '\0') {
+		log_msg(ENC_LOG_WARN, "wifi L0 bringup: WIFI_DEVICE not found in /etc/wifi.conf");
+		return false;
+	}
+
+	log_msg(ENC_LOG_WARN, "wifi L0 bringup: loading driver for %s", device);
+
+	/* 1. 重新加载无线驱动（modprobe 会处理已加载情况，无害） */
+	sh("/etc/wireless/usb \"%s\" >/dev/null 2>&1", device);
+
+	/* 2. 等待 wlan0 出现（最多 5s） */
+	for (int i = 0; i < 5; i++) {
+		if (iface_exists(c))
+			break;
+		sleep(1);
+	}
+
+	if (!iface_exists(c)) {
+		log_msg(ENC_LOG_ERROR, "wifi L0 bringup: %s still missing after driver load",
+			c->wifi_iface);
+		return false;
+	}
+
+	/* 3. ifup wlan0 触发 wpa_supplicant（pre-up 从 env 读 SSID/密码） */
+	log_msg(ENC_LOG_INFO, "wifi L0 bringup: ifup %s (wpa_supplicant will connect to skilljudge)",
+		c->wifi_iface);
+	sh("ifup %s >/dev/null 2>&1", c->wifi_iface);
+
+	return true;
+}
+
 /* ---------------- L1-L3 恢复动作 ---------------- */
 
 static void sh(const char *fmt, ...)
@@ -208,15 +296,31 @@ const char *det_wifi_watch(const enc_cfg_t *c, char *reason, size_t rsz)
 
 		if (last_rec == 0 ||
 		    now - last_rec >= WIFI_RECOVER_MIN_INT) {
-			int lvl = rec_tries + 1;
+			/*
+			 * iface_missing: wlan0 不存在，L1-L3 恢复动作
+			 * （ifconfig/wpa_cli/udhcpc）对不存在的接口无意义。
+			 * 改为 L0 主动拉起：重新加载驱动 + ifup wlan0，
+			 * 触发 wpa_supplicant 从 env 读 SSID/密码连 skilljudge。
+			 * 每 60s 重试一次，持续连下去直到 wlan0 出现。
+			 */
+			if (strcmp(why, "iface_missing") == 0) {
+				bool ok = wifi_bringup(c);
+				last_rec = now;
+				rec_tries++;
+				snprintf(reason, rsz,
+					 "%s (L0 bringup %s)",
+					 why, ok ? "initiated" : "failed");
+			} else {
+				int lvl = rec_tries + 1;
 
-			if (lvl > WIFI_RECOVER_MAX_LVL)
-				lvl = WIFI_RECOVER_MAX_LVL; /* L3 持续重试 */
-			wifi_recover(c, lvl);
-			last_rec = now;
-			rec_tries++;
-			snprintf(reason, rsz, "%s (L%d recovery applied)",
-				 why, lvl);
+				if (lvl > WIFI_RECOVER_MAX_LVL)
+					lvl = WIFI_RECOVER_MAX_LVL; /* L3 持续重试 */
+				wifi_recover(c, lvl);
+				last_rec = now;
+				rec_tries++;
+				snprintf(reason, rsz, "%s (L%d recovery applied)",
+					 why, lvl);
+			}
 		} else {
 			snprintf(reason, rsz, "%s (recovery pending L%d)",
 				 why,
