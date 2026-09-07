@@ -175,6 +175,35 @@ GPIO_N=$(ls /dev/gpiochip* 2>/dev/null | wc -l)
 [ "$GPIO_N" -ge 5 ] && check "gpio_chips" "OK" "count=$GPIO_N" || check "gpio_chips" "WARN" "count=$GPIO_N"
 
 # ======================================================================
+# 7b. L1: 根文件系统可写性（126 板故障教训 2026-09-05：
+#     overlay remount-ro 后进程假活，所有写失败但网络幸存）
+# ======================================================================
+ROOT_PROBE=/root/.hwprobe_ro_test
+if echo "ok" > "$ROOT_PROBE" 2>/dev/null && grep -q ok "$ROOT_PROBE" 2>/dev/null; then
+  rm -f "$ROOT_PROBE"
+  check "rootfs_rw" "OK" "根文件系统可写"
+else
+  rm -f "$ROOT_PROBE" 2>/dev/null
+  check "rootfs_rw" "FAIL" "根文件系统只读(overlay remount-ro?)"
+fi
+
+# ======================================================================
+# 7c. L1: SSH host key 有效性（126 板故障教训：
+#     overlay 只读后 host key 变 0 字节，SSH KEX 阶段断连）
+# ======================================================================
+HK_FILE=/etc/dropbear/dropbear_ed25519_host_key
+if [ -f "$HK_FILE" ]; then
+  HK_SIZE=$(wc -c < "$HK_FILE" 2>/dev/null)
+  if [ "$HK_SIZE" -gt 0 ] 2>/dev/null; then
+    check "ssh_host_key" "OK" "ed25519 key ${HK_SIZE}B"
+  else
+    check "ssh_host_key" "FAIL" "host key 文件存在但大小为 0"
+  fi
+else
+  check "ssh_host_key" "FAIL" "host key 文件不存在"
+fi
+
+# ======================================================================
 # 8. 资源摸底 (人工项准备)
 # ======================================================================
 LED_TOOL=""

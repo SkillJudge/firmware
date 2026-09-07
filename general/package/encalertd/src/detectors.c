@@ -14,6 +14,7 @@
  */
 #define _GNU_SOURCE
 #include <dirent.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
 #include <stdio.h>
@@ -390,6 +391,64 @@ static const char *det_mem_pressure(const enc_cfg_t *c,
 		return NULL;
 	snprintf(reason, rsz, "MemAvailable=%ldkB", avail_kb);
 	return reason;
+}
+
+/* ==================== 4d. 根文件系统只读 (4004) ====================
+ * 126 板故障教训（2026-09-05）：overlay 被 remount-ro 后，
+ * 所有写盘步骤失败但 MQTT 长连接幸存——"假活"状态。
+ * 写探针到 state_dir（overlay 层），失败即判定只读。
+ */
+static const char *det_rootfs_ro(const enc_cfg_t *c,
+				 char *reason, size_t rsz)
+{
+	char probe[320];
+	int fd;
+
+	snprintf(probe, sizeof(probe), "%s/.fs_probe", c->state_dir);
+	fd = open(probe, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+	if (fd < 0) {
+		snprintf(reason, rsz, "open(%s) failed errno=%d",
+			 probe, errno);
+		return reason;
+	}
+	{
+		ssize_t w = write(fd, "1", 1);
+
+		close(fd);
+		if (w != 1) {
+			snprintf(reason, rsz, "write(%s) failed", probe);
+			return reason;
+		}
+	}
+	unlink(probe);
+	return NULL;
+}
+
+/* ==================== 4e. SSH 服务可用性 (6105) ====================
+ * 126 板故障教训：overlay 只读后 dropbear host key 文件变 0 字节，
+ * 新 SSH 连接在 KEX 签名阶段断连。检测 host key 文件存在且非空。
+ */
+#define DROPBEAR_KEY_DIR        "/etc/dropbear"
+#define DROPBEAR_ED25519_KEY    DROPBEAR_KEY_DIR "/dropbear_ed25519_host_key"
+
+static const char *det_ssh_avail(const enc_cfg_t *c,
+				 char *reason, size_t rsz)
+{
+	struct stat st;
+
+	(void)c;
+	/* host key 文件不存在或大小为 0 → SSH 不可用 */
+	if (stat(DROPBEAR_ED25519_KEY, &st) != 0) {
+		snprintf(reason, rsz, "host_key missing: %s",
+			 DROPBEAR_ED25519_KEY);
+		return reason;
+	}
+	if (st.st_size == 0) {
+		snprintf(reason, rsz, "host_key empty: %s",
+			 DROPBEAR_ED25519_KEY);
+		return reason;
+	}
+	return NULL;
 }
 
 /* ==================== 5. 服务进程死亡 (6103 + 风暴 6104) ====================
@@ -1048,6 +1107,14 @@ det_t *detectors_registry(void)
 
 	{ "mem_pressure", 30,  5, 5,  en_sysres, det_mem_pressure,  NULL,
 	  { 8103, "mem_pressure", "error", "可用内存不足(%s)，OOM 风险" },
+	  { 0, "", "", "" } },
+
+	{ "rootfs_ro",    30,  2, 3,  en_sysres, det_rootfs_ro,     NULL,
+	  { 4004, "rootfs_readonly", "error", "根文件系统只读(%s)，写探针失败" },
+	  { 0, "", "", "" } },
+
+	{ "ssh_avail",    30,  2, 3,  en_process, det_ssh_avail,   NULL,
+	  { 6105, "ssh_unavailable", "error", "SSH 服务不可用(%s)，host key 异常" },
 	  { 0, "", "", "" } },
 
 	{ "proc_down",    15,  2, 3,  en_process, det_proc_down,    cb_proc_restart,
