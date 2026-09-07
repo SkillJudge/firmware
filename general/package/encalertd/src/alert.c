@@ -353,16 +353,38 @@ static int spool_append_and_try(const enc_cfg_t *c, const char *payload)
 
 	snprintf(path, sizeof(path), "%s/%08u.msg", g_al.dir_spool, g_al.seq);
 	fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
-	if (fd < 0)
-		return -1;
+
+	/* 直发通道（2026-09-07 126 板故障教训）：
+	 * spool 落盘失败通常意味着 overlay/rootfs 已只读——此时
+	 * MQTT 连接可能仍活着（长连接不依赖磁盘写），跳过 spool
+	 * 直接发布，确保"存储只读"这类故障能告警出去。
+	 */
+	if (fd < 0) {
+		log_msg(ENC_LOG_WARN,
+			"spool write failed (errno=%d), trying direct publish",
+			errno);
+		snprintf(topic, sizeof(topic), ALERT_TOPIC_FMT,
+			 device_id_get(c));
+		r = try_publish(c, topic, payload);
+		return (r == MQ_OK) ? 0 : 1;
+	}
+
 	{
 		size_t len = strlen(payload);
 		ssize_t w = write(fd, payload, len);
 
 		fsync(fd);
 		close(fd);
-		if (w != (ssize_t)len)
-			return -1;
+		if (w != (ssize_t)len) {
+			log_msg(ENC_LOG_WARN,
+				"spool write short (wrote %zd/%zu), trying direct publish",
+				w, len);
+			unlink(path);
+			snprintf(topic, sizeof(topic), ALERT_TOPIC_FMT,
+				 device_id_get(c));
+			r = try_publish(c, topic, payload);
+			return (r == MQ_OK) ? 0 : 1;
+		}
 	}
 
 	/* 写后强制收敛：保证最终 .msg 文件数 ≤ SPOOL_MAX_FILES。

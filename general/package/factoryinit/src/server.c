@@ -112,10 +112,30 @@ int main() {
             // 读取电量百分比（读不到保持 null）
             get_cmd_output("sh /root/encoder/battery.sh read 2>/dev/null", battery, sizeof(battery));
 
-            // 读取 WiFi 信号强度（RSSI，dBm）：wpa_cli status 输出 "rssi=-45"；
-            // 未连接/无 WiFi 模块时无 rssi 行，保持 null。
-            // 固件带 wireless_tools + wpa_supplicant_cli（无 iw 命令）。
-            get_cmd_output("wpa_cli -i wlan0 status 2>/dev/null | awk -F= '/^rssi=/{print $2}'", wifi_rssi, sizeof(wifi_rssi));
+            // 读取 WiFi 信号强度（RSSI，dBm）。
+            // 多源策略（2026-09-07 修复：原 wpa_cli status 不输出 rssi= 行导致 "--"）：
+            //   1. wpa_cli signal → 输出 "rssi=-45"（wpa_supplicant 标准信号查询接口）
+            //   2. /proc/net/wireless → 内核接口，格式 "wlan0: ... -45. ..." level 字段
+            //   3. iwconfig → wireless_tools 回退
+            // 全部失败时保持 null → C# 端显示 "--"
+            {
+                /* 1. wpa_cli signal（优先） */
+                get_cmd_output(
+                    "wpa_cli -i wlan0 signal 2>/dev/null | awk -F= '/^rssi=/{print $2}'",
+                    wifi_rssi, sizeof(wifi_rssi));
+                /* 2. /proc/net/wireless 回退 */
+                if (strcmp(wifi_rssi, "null") == 0) {
+                    get_cmd_output(
+                        "awk 'NR>2{gsub(/\\./,\"\",$4); print $4}' /proc/net/wireless 2>/dev/null | head -1",
+                        wifi_rssi, sizeof(wifi_rssi));
+                }
+                /* 3. iwconfig 最后回退 */
+                if (strcmp(wifi_rssi, "null") == 0) {
+                    get_cmd_output(
+                        "iwconfig wlan0 2>/dev/null | grep -o 'Signal level=[-0-9]*' | cut -d= -f2",
+                        wifi_rssi, sizeof(wifi_rssi));
+                }
+            }
 
             // 拼接协议（严格格式）
             snprintf(resp_buf, sizeof(resp_buf),

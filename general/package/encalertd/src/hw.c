@@ -22,7 +22,9 @@
  *   i2c_bus1       /dev/i2c-1 上 0x20(PCF8574) 与 0x36 应答
  *   audio_hw       /dev/acodec 存在
  *   wlan           c->wifi_iface 接口存在
- *   （SD 卡三态复用 4001/4002/4003，网络连通复用 wifi_watch，不重复）
+ *   rootfs         state_dir 写探针（126 板故障：overlay remount-ro 假活）
+ *   ssh            dropbear ed25519 host key 文件存在且非空
+ *   （SD 卡三态复用 4001/4002/4003/4004，网络连通复用 wifi_watch，不重复）
  *
  * I2C 并发说明：与 majestic 共享总线，但本检测器周期为小时级、单次事务
  * 仅微秒级，且用户已在运行期实测 i2cdetect -r 探测安全，风险可忽略。
@@ -208,6 +210,45 @@ const char *det_hw_watch(const enc_cfg_t *c, char *reason, size_t rsz)
 		if (access(wp, F_OK) != 0)
 			hw_fail_append(fails, sizeof(fails),
 				       "wlan:iface_missing");
+	}
+
+	/* 6. 根文件系统可写性（126 板故障教训 2026-09-05：
+	 *    overlay remount-ro 后所有写失败但进程"假活"） */
+	{
+		char probe[320];
+		int fd;
+
+		snprintf(probe, sizeof(probe), "%s/.hw_fs_probe",
+			 c->state_dir);
+		fd = open(probe, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		if (fd < 0) {
+			hw_fail_append(fails, sizeof(fails),
+				       "rootfs:write_probe_fail");
+		} else {
+			ssize_t w = write(fd, "1", 1);
+
+			close(fd);
+			if (w != 1)
+				hw_fail_append(fails, sizeof(fails),
+					       "rootfs:write_short");
+			else
+				unlink(probe);
+		}
+	}
+
+	/* 7. SSH host key 有效性（126 板故障教训：
+	 *    overlay 只读后 host key 文件变 0 字节，
+	 *    新 SSH 连接 KEX 签名阶段断连） */
+	{
+		struct stat st;
+		const char *key = "/etc/dropbear/dropbear_ed25519_host_key";
+
+		if (stat(key, &st) != 0)
+			hw_fail_append(fails, sizeof(fails),
+				       "ssh:host_key_missing");
+		else if (st.st_size == 0)
+			hw_fail_append(fails, sizeof(fails),
+				       "ssh:host_key_empty");
 	}
 
 	if (!fails[0])
