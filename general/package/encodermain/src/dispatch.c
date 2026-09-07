@@ -453,6 +453,7 @@ static bool task_dedup_key(const cmd_t *cmd, proto_cmd_t cc, char *key,
 	switch (cc) {
 	case ENCM_CMD_TASK_PREPARE_DESK_VOICE:
 	case ENCM_CMD_TASK_STREAM_START:
+	case ENCM_CMD_TASK_STREAM_STOP:
 	case ENCM_CMD_TASK_RECORD_START:
 	case ENCM_CMD_TASK_RECORD_STOP:
 	case ENCM_CMD_TASK_RESET:
@@ -846,6 +847,10 @@ static void worker_handle(const disp_msg_t *m)
 			case ENCM_CMD_STREAM_STOP:
 				dedup_remove_pair(cc, &cmd, ENCM_CMD_STREAM_START);
 				break;
+			case ENCM_CMD_TASK_STREAM_STOP:
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_TASK_STREAM_START);
+				break;
 			case ENCM_CMD_RECORD_STOP:
 				dedup_remove_pair(cc, &cmd, ENCM_CMD_RECORD_START);
 				break;
@@ -899,6 +904,10 @@ static void worker_handle(const disp_msg_t *m)
 			case ENCM_CMD_STREAM_STOP:
 				dedup_remove_pair(cc, &cmd,
 						  ENCM_CMD_STREAM_START);
+				break;
+			case ENCM_CMD_TASK_STREAM_STOP:
+				dedup_remove_pair(cc, &cmd,
+						  ENCM_CMD_TASK_STREAM_START);
 				break;
 			case ENCM_CMD_RECORD_STOP:
 				dedup_remove_pair(cc, &cmd,

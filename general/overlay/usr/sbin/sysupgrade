@@ -154,6 +154,54 @@ self_update() {
 	fi
 }
 
+wipe_sdcard_content() {
+	local d="$1"
+	[ -z "$d" ] && return 0
+	[ ! -d "$d" ] && return 0
+	echo_c 33 "\nWiping user data on SD card: $d"
+
+	# ---- 清理录像/图片（按日期目录、直接文件） ----
+	echo_c 37 "  -> removing record files (*.mp4 *.ts *.jpg *.jpeg)..."
+	find "$d" -type f \
+		\( -name '*.mp4' -o -name '*.ts' -o -name '*.jpg' -o -name '*.jpeg' -o -name '*.mov' -o -name '*.mkv' \) \
+		-delete 2>/dev/null || true
+
+	# ---- 清理快照目录 / snapshot ----
+	for sub in snapshot snap capture captures; do
+		if [ -d "$d/$sub" ]; then
+			echo_c 37 "  -> removing $d/$sub ..."
+			rm -rf "$d/$sub" 2>/dev/null || true
+		fi
+	done
+
+	# ---- 清理崩溃日志 / logs ----
+	if [ -d "$d/logs" ]; then
+		echo_c 37 "  -> removing $d/logs ..."
+		rm -rf "$d/logs" 2>/dev/null || true
+	fi
+
+	# ---- 清理开发/部署残留（encdeploy、bin 临时目录） ----
+	for sub in encdeploy bin; do
+		if [ -d "$d/$sub" ]; then
+			echo_c 37 "  -> removing $d/$sub ..."
+			rm -rf "$d/$sub" 2>/dev/null || true
+		fi
+	done
+
+	# ---- 清理产测临时文件 .hwprobe_* ----
+	echo_c 37 "  -> removing .hwprobe_* temp files..."
+	find "$d" -maxdepth 1 -type f -name '.hwprobe_*' -delete 2>/dev/null || true
+
+	# ---- 清理 YYYY-MM-DD / YYYYMMDD 格式的录像日期空目录 ----
+	echo_c 37 "  -> removing empty date directories..."
+	find "$d" -maxdepth 2 -type d -empty 2>/dev/null | while read -r ed; do
+		rmdir "$ed" 2>/dev/null || true
+	done
+
+	sync
+	echo_c 32 "SD card user data wipe finished."
+}
+
 check_sdcard() {
 	echo_c 33 "\nUnmounting SD card"
 	stoplist="autoupdate-kernel.img autoupdate-rootfs.img autoupdate-uboot.img"
@@ -169,6 +217,8 @@ check_sdcard() {
 				exit 1
 			fi
 		done
+		# free_resources 已停止业务进程，此时安全清理 SD 用户数据，确保升级后恢复到干净状态
+		wipe_sdcard_content "$d"
 		umount $d
 	done
 }

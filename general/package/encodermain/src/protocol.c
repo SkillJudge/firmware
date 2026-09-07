@@ -157,6 +157,9 @@ proto_cmd_t proto_command_map(const cmd_t *c)
 		if (!strcmp(c->action, "start_stream") &&
 		    !strcmp(c->msg, "startStream"))
 			return ENCM_CMD_TASK_STREAM_START;
+		if (!strcmp(c->action, "stop_stream") &&
+		    !strcmp(c->msg, "stopStream"))
+			return ENCM_CMD_TASK_STREAM_STOP;
 		if (!strcmp(c->action, "start_record") &&
 		    !strcmp(c->msg, "startRecord"))
 			return ENCM_CMD_TASK_RECORD_START;
@@ -180,6 +183,7 @@ const char *proto_cmd_name(proto_cmd_t cc)
 	case ENCM_CMD_STREAM_STOP:           return "stream_stop";
 	case ENCM_CMD_TASK_PREPARE_DESK_VOICE: return "task_prepare_desk_voice";
 	case ENCM_CMD_TASK_STREAM_START:     return "task_stream_start";
+	case ENCM_CMD_TASK_STREAM_STOP:      return "task_stream_stop";
 	case ENCM_CMD_TASK_RECORD_START:     return "task_record_start";
 	case ENCM_CMD_TASK_RECORD_STOP:      return "task_record_stop";
 	case ENCM_CMD_TASK_RESET:            return "task_reset";
@@ -568,6 +572,14 @@ void proto_ack_build(const cmd_t *c, const feat_result_t *r,
 		ack_task_id(&d, ex, c);
 		ack_int(&d, ex, "code", code);
 		proto_payload_wrap(&b, c->msg_id, "startStreamAck", &d);
+		break;
+	case ENCM_CMD_TASK_STREAM_STOP:
+		proto_topic_build(out_topic, tsz, "encoder", c->device_id,
+				  c->sender, c->sender_sub, "task",
+				  "stop_stream_ack");
+		ack_task_id(&d, ex, c);
+		ack_int(&d, ex, "code", code);
+		proto_payload_wrap(&b, c->msg_id, "stopStreamAck", &d);
 		break;
 	case ENCM_CMD_TASK_RECORD_START:
 		proto_topic_build(out_topic, tsz, "encoder", c->device_id,

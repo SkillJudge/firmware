@@ -13,3 +13,8 @@
 # 每分钟检查 encalertd 存活；死亡时注入事件文件并拉起，
 # encalertd 启动后消费事件 → 6001 报警（断网时落 spool 补发）
 * * * * * pidof encalertd >/dev/null 2>&1 || { echo "watchdog_missing|\$(date +%s)" > /tmp/encalertd_event; /usr/bin/encalertd -c /etc/encalertd.conf -b; }
+
+### overlay_log_mgr-cron-begin ###
+# 每 15 分钟检查 overlay 分区水位，分级清理日志（防止 rootfs_data 写满）
+*/15 * * * * /usr/sbin/overlay_log_mgr.sh >/dev/null 2>&1
+### overlay_log_mgr-cron-end ###

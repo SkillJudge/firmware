@@ -74,6 +74,8 @@ int main() {
             char wifi_ip[64] = {0};
             char eth_mac[64] = {0};
             char wifi_mac[64] = {0};
+            char battery[16] = {0};
+            char wifi_rssi[16] = {0};
 
             // 全部初始化为 null
             strcpy(ver, "null");
@@ -83,6 +85,8 @@ int main() {
             strcpy(wifi_ip, "null");
             strcpy(eth_mac, "null");
             strcpy(wifi_mac, "null");
+            strcpy(battery, "null");
+            strcpy(wifi_rssi, "null");
 
             // 读取版本
             get_cmd_output("cat /etc/version 2>/dev/null", ver, sizeof(ver));
@@ -102,19 +106,29 @@ int main() {
             // 无线 IP
             get_cmd_output("ip addr show wlan0 2>/dev/null | grep 'inet ' | awk '{print $2}' | cut -d/ -f1", wifi_ip, sizeof(wifi_ip)); 
 
-            // 读取 wlan0 MAC 
+            // 读取 wlan0 MAC
             get_cmd_output("cat /sys/class/net/wlan0/address 2>/dev/null", wifi_mac, sizeof(wifi_mac));
+
+            // 读取电量百分比（读不到保持 null）
+            get_cmd_output("sh /root/encoder/battery.sh read 2>/dev/null", battery, sizeof(battery));
+
+            // 读取 WiFi 信号强度（RSSI，dBm）：wpa_cli status 输出 "rssi=-45"；
+            // 未连接/无 WiFi 模块时无 rssi 行，保持 null。
+            // 固件带 wireless_tools + wpa_supplicant_cli（无 iw 命令）。
+            get_cmd_output("wpa_cli -i wlan0 status 2>/dev/null | awk -F= '/^rssi=/{print $2}'", wifi_rssi, sizeof(wifi_rssi));
 
             // 拼接协议（严格格式）
             snprintf(resp_buf, sizeof(resp_buf),
-                "DEVICEID=%s|VER=%s|IP=%s|WIFI_IP=%s|IPCNUM=%s|MAC=%s|WIFI_MAC=%s",
+                "DEVICEID=%s|VER=%s|IP=%s|WIFI_IP=%s|IPCNUM=%s|MAC=%s|WIFI_MAC=%s|BATTERY=%s|WIFI_RSSI=%s",
                 deviceid,
                 ver,
                 eth_ip,
                 wifi_ip,
                 ipnum,
                 eth_mac,
-                wifi_mac
+                wifi_mac,
+                battery,
+                wifi_rssi
             );
 
             // 发送
@@ -168,20 +182,43 @@ int main() {
             // 后台延时 2 秒后重启，给 UDP 回包留出时间
             system("(sleep 2; reboot) &");
         }
+        else if (strcmp(buffer, "POWEROFF") == 0) {
+            // 硬关机：返回确认后，后台执行硬件关机脚本。
+            // 关机电路：PCF8574 @ I2C1/0x20 的 P2（软关机引脚，常高），
+            // 脚本内 sync 落盘 + 后台 poweroff 兜底 + 拉低 P2 并保持，
+            // 硬件检测到 P2 持续低电平（>=2s）后彻底断电。
+            // 脚本前台会阻塞数秒，必须后台运行，绝不阻塞 UDP 主循环。
+            sendto(sock, "POWEROFF_SUCCESS", 16, 0, (struct sockaddr *)&client_addr, addr_len);
+            printf("[POWEROFF] Hard poweroff command received, asserting P2 shutdown pin\n");
+            system("( sleep 1; /bin/sh /root/encoder/actions/shutdown_lowbattery.sh ) >/dev/null 2>&1 &");
+        }
         else if (strstr(buffer, "FIRMWAREUPDATE=") == buffer)
         {
             const char *ftp_url = buffer + strlen("FIRMWAREUPDATE=");
             char cmd[512];
+            char battery[16];
+            int battery_percent;
 
-            // 拼接后台执行命令
-            // 1. 显式调用 /bin/sh 执行脚本
-            // 2. 末尾加上 & 让其进入系统后台运行，绝不阻塞主循环
-            snprintf(cmd, sizeof(cmd), "/bin/sh /usr/bin/ftp_upgrade \"%s\" &", ftp_url);
+            // 刷机前电量检查：电量低于 30%（或读不到电量）拒绝刷机，
+            // 防止烧写过程中断电变砖。电量读取走 /root/encoder/battery.sh read。
+            get_cmd_output("sh /root/encoder/battery.sh read 2>/dev/null", battery, sizeof(battery));
+            battery_percent = atoi(battery);
+            if (battery_percent < 30) {
+                snprintf(resp_buf, sizeof(resp_buf), "BATTERY_LOW=%s", battery);
+                sendto(sock, resp_buf, strlen(resp_buf), 0, (struct sockaddr *)&client_addr, addr_len);
+                printf("[UPDATE] Rejected, battery %s%% < 30%%\n",
+                       (strcmp(battery, "null") == 0) ? "unreadable(null)" : battery);
+            } else {
+                // 拼接后台执行命令
+                // 1. 显式调用 /bin/sh 执行脚本
+                // 2. 末尾加上 & 让其进入系统后台运行，绝不阻塞主循环
+                snprintf(cmd, sizeof(cmd), "/bin/sh /usr/bin/ftp_upgrade \"%s\" &", ftp_url);
 
-            printf("[UPDATE] Triggered background upgrade: %s\n", cmd);
+                printf("[UPDATE] Triggered background upgrade: %s\n", cmd);
 
-            // 执行后立刻返回，主程序不会被卡死
-            system(cmd);
+                // 执行后立刻返回，主程序不会被卡死
+                system(cmd);
+            }
         }
         else if (strcmp(buffer, "HWTEST") == 0)
         {
