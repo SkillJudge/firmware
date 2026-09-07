@@ -47,7 +47,6 @@ general/overlay/lib/mdev/automount.sh
 general/overlay/usr/bin/ftp_upgrade
 general/overlay/usr/bin/ircut_demo
 general/overlay/usr/bin/led_test
-general/overlay/usr/bin/led_test.sh
 general/overlay/usr/bin/power_key_test
 
 general/overlay/usr/sbin/firstboot

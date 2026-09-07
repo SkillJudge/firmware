@@ -4,6 +4,8 @@ set -e
 
 git pull
 
+chmod +x ./add_exec.sh
+
 ./add_exec.sh
 
 echo "=================================================="
