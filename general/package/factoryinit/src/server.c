@@ -114,22 +114,17 @@ int main() {
 
             // 读取 WiFi 信号强度（RSSI，dBm）。
             // 多源策略（2026-09-07 修复：原 wpa_cli status 不输出 rssi= 行导致 "--"）：
-            //   1. wpa_cli signal → 输出 "rssi=-45"（wpa_supplicant 标准信号查询接口）
-            //   2. /proc/net/wireless → 内核接口，格式 "wlan0: ... -45. ..." level 字段
-            //   3. iwconfig → wireless_tools 回退
+            //   板端实测（116）：wpa_cli 不可用（ctrl_interface socket 不存在），
+            //   /proc/net/wireless 可靠（内核接口），iwconfig 可用作回退。
+            //   1. /proc/net/wireless → 内核接口，格式 "wlan0: ... -37. ..." level 字段
+            //   2. iwconfig → wireless_tools 回退
             // 全部失败时保持 null → C# 端显示 "--"
             {
-                /* 1. wpa_cli signal（优先） */
+                /* 1. /proc/net/wireless（内核接口，优先） */
                 get_cmd_output(
-                    "wpa_cli -i wlan0 signal 2>/dev/null | awk -F= '/^rssi=/{print $2}'",
+                    "awk 'NR>2{gsub(/\\./,\"\",$4); print $4}' /proc/net/wireless 2>/dev/null | head -1",
                     wifi_rssi, sizeof(wifi_rssi));
-                /* 2. /proc/net/wireless 回退 */
-                if (strcmp(wifi_rssi, "null") == 0) {
-                    get_cmd_output(
-                        "awk 'NR>2{gsub(/\\./,\"\",$4); print $4}' /proc/net/wireless 2>/dev/null | head -1",
-                        wifi_rssi, sizeof(wifi_rssi));
-                }
-                /* 3. iwconfig 最后回退 */
+                /* 2. iwconfig 回退 */
                 if (strcmp(wifi_rssi, "null") == 0) {
                     get_cmd_output(
                         "iwconfig wlan0 2>/dev/null | grep -o 'Signal level=[-0-9]*' | cut -d= -f2",
