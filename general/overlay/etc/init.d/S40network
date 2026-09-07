@@ -1,10 +1,23 @@
 #!/bin/sh
 
-# 无线优先、有线保底的网络启动脚本。
-# 检测到无线网卡时只启动 Wi-Fi；没有无线网卡时只启动有线。
+# 网络启动脚本：有线优先（开发模式），无线持续重连（生产模式）。
+#
+# 设计逻辑：
+#   1. 检测 eth0 carrier（网线插入）→ ifup eth0，停 wlan0（单一网络）
+#   2. 无网线 → 加载 WiFi 驱动 + ifup wlan0（启动 wpa_supplicant），不阻塞等 IP
+#      后台 watchdog 前 60s 每 5s 快速 L1+L2 重试，拿到 IPv4 立即退出
+#      60s 后交给 encalertd 的 det_wifi_watch（30s 周期，L1-L3 分级恢复）
+#   3. 同一时刻只接入一个网络（有线时停 WiFi，无线时停 eth0）
+#
+# 两个 C 进程（encodermain/encalertd）按 S40 之后的正常时序启动，
+# 自行处理"没网就重试"语义（MQTT 重连/register 5s 重试）。
 
 CONFIG_FILE="/etc/wifi.conf"
-WLAN_WAIT_SEC=5
+WLAN_WAIT_SEC=8
+ETH_CARRIER_WAIT=2
+QUICK_WATCHDOG_SEC=60
+QUICK_RETRY_INT=5
+WATCHDOG_PIDFILE="/tmp/wifi_quick_watchdog.pid"
 
 wlan_mac=$(fw_printenv -n wlanmac 2>/dev/null)
 
@@ -71,21 +84,86 @@ start_eth0() {
     ifup eth0
 }
 
+# 检查接口是否拿到 IPv4
+has_ipv4() {
+    ip addr show "$1" 2>/dev/null | grep -q 'inet '
+}
+
+# 后台快速 watchdog：前 60s 每 5s 重试 L1(ifconfig down/up)+L2(wpa reassociate)
+# 拿到 IPv4 立即退出；60s 后交给 encalertd 接管
+wifi_quick_watchdog() {
+    elapsed=0
+
+    while [ "$elapsed" -lt "$QUICK_WATCHDOG_SEC" ]; do
+        if has_ipv4 wlan0; then
+            echo "[wifi-watchdog] wlan0 got IPv4, exiting."
+            rm -f "$WATCHDOG_PIDFILE"
+            return 0
+        fi
+
+        # L1: 接口复位（触发 wpa_supplicant 自动重关联）
+        ifconfig wlan0 down 2>/dev/null
+        sleep 1
+        ifconfig wlan0 up 2>/dev/null
+
+        # L2: wpa_cli 主动重关联（wpa_cli 不可用时无害失败）
+        wpa_cli -i wlan0 reassociate >/dev/null 2>&1 || \
+            wpa_cli -i wlan0 reconnect >/dev/null 2>&1 || true
+
+        sleep "$QUICK_RETRY_INT"
+        elapsed=$((elapsed + QUICK_RETRY_INT + 1))
+    done
+
+    echo "[wifi-watchdog] 60s elapsed, handing over to encalertd."
+    rm -f "$WATCHDOG_PIDFILE"
+}
+
+stop_watchdog() {
+    if [ -f "$WATCHDOG_PIDFILE" ]; then
+        pid=$(cat "$WATCHDOG_PIDFILE" 2>/dev/null)
+        [ -n "$pid" ] && kill "$pid" 2>/dev/null
+        rm -f "$WATCHDOG_PIDFILE"
+    fi
+}
+
 start() {
     echo "Starting network..."
     ifup lo
 
-    if load_wifi_device; then
-        echo "Using Wi-Fi network."
-        start_wifi
-    else
-        echo "Wi-Fi device not found, using wired network."
+    # 检测 eth0 carrier（最多 2s）
+    eth_cable=0
+    i=0
+    while [ "$i" -lt "$ETH_CARRIER_WAIT" ]; do
+        if [ "$(cat /sys/class/net/eth0/carrier 2>/dev/null)" = "1" ]; then
+            eth_cable=1
+            break
+        fi
+        i=$((i + 1))
+        sleep 1
+    done
+
+    if [ "$eth_cable" = "1" ]; then
+        echo "Ethernet cable detected, using eth0 (dev mode)."
+        stop_watchdog
         start_eth0
+    else
+        echo "No ethernet cable, starting Wi-Fi (production mode)."
+        if load_wifi_device; then
+            start_wifi
+            # 后台快速 watchdog（不阻塞 init），60s 后交给 encalertd
+            stop_watchdog
+            wifi_quick_watchdog &
+            echo $! > "$WATCHDOG_PIDFILE"
+        else
+            echo "Wi-Fi device load failed, falling back to eth0."
+            start_eth0
+        fi
     fi
 }
 
 stop() {
     echo "Stopping network..."
+    stop_watchdog
     stop_wifi
     stop_eth0
     ifdown -f usb0 >/dev/null 2>&1
