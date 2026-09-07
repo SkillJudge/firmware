@@ -83,6 +83,51 @@ else
 fi
 rm -f "$CRLF_LIST"
 
+# 步骤 3.6: 修复被 Windows 破坏的符号链接
+# 背景：Windows git 默认 core.symlinks=false，符号链接被转成普通文件（内容为目标路径）。
+# 这些伪符号链接文件打包进固件后，调用方会把目标路径当成命令执行而报错
+# （如 check_mac -> extutils 被破坏后报 syntax error）。
+# 此处扫描所有小文件（<256字节），若内容是相对路径且目标存在，则重建为符号链接。
+echo "--> 步骤 3.6: 检查并修复被破坏的符号链接..."
+SYMLINK_COUNT=0
+while read -r f; do
+    # 读取文件内容（去除首尾空白），符号链接目标通常是简短相对路径
+    target=$(head -c 256 "$f" 2>/dev/null | tr -d '[:space:]')
+    [ -z "$target" ] && continue
+    # 符号链接目标只含路径安全字符，不含换行
+    case "$target" in
+        *[!a-zA-Z0-9_./-]*) continue ;;
+    esac
+    # 目标必须存在且不是目录（避免误判）
+    target_path="$(dirname "$f")/$target"
+    [ -e "$target_path" ] || continue
+    [ -d "$target_path" ] && continue
+    # 重建符号链接
+    rm -f "$f"
+    ln -s "$target" "$f"
+    SYMLINK_COUNT=$((SYMLINK_COUNT + 1))
+    echo "   ✓ 修复符号链接: ${f#./} -> $target"
+done < <(find ./general ./br-ext-chip-* -type f -size -256c 2>/dev/null)
+echo "   ✓ 共修复 ${SYMLINK_COUNT} 个符号链接"
+
+# 步骤 3.7: 确保 extutils 的多调用符号链接存在
+# 背景：extutils 是多调用脚本（类似 busybox），通过 $0 判断调用名称。
+# check_mac/cli/sysinfo/netip_hash 必须是指向 extutils 的符号链接。
+# Windows 无法创建符号链接（需管理员/开发者模式），故在构建时（Linux）创建。
+echo "--> 步骤 3.7: 确保 extutils 多调用符号链接..."
+EXTUTILS_DIR="./general/overlay/usr/sbin"
+if [ -f "$EXTUTILS_DIR/extutils" ]; then
+    for link in check_mac cli sysinfo netip_hash; do
+        if [ ! -L "$EXTUTILS_DIR/$link" ]; then
+            rm -f "$EXTUTILS_DIR/$link"
+            ln -s extutils "$EXTUTILS_DIR/$link"
+            echo "   ✓ 创建符号链接: $link -> extutils"
+        fi
+    done
+else
+    echo "   ⚠ extutils 不存在，跳过符号链接创建"
+fi
+
 # 步骤 4: 调用 make BOARD=my clean all 编译（已在顶层目录）
 echo "--> 步骤 4: 开始全量清洗并编译板型 [my] ..."
 
