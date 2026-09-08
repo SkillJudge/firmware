@@ -295,6 +295,60 @@ int main() {
                 }
             }
         }
+        else if (strcmp(buffer, "SDFORMAT") == 0)
+        {
+            // 格式化 SD 卡为 FAT32：后台卸载 /mnt/mmcblk0p1、mkfs.vfat -F 32、重新挂载，
+            // 结果（含 RC=0/非零）写 /tmp/sdformat_report.txt。异步执行，绝不阻塞主循环。
+            // 结果用 SDFORMATSTATUS 查询。SD 设备固定为 /dev/mmcblk0p1（与 CAPTURE 路径一致）。
+            char cmd[512];
+
+            if (access("/tmp/sdformat_running", F_OK) == 0) {
+                sendto(sock, "SDFORMAT_BUSY", 14, 0,
+                       (struct sockaddr *)&client_addr, addr_len);
+                printf("[SDFORMAT] busy, previous format still running\n");
+            } else {
+                unlink("/tmp/sdformat_report.txt");
+                FILE *f = fopen("/tmp/sdformat_running", "w");
+                if (f) fclose(f);
+                snprintf(cmd, sizeof(cmd),
+                         "( sync; "
+                         "  umount /mnt/mmcblk0p1 2>/dev/null; "
+                         "  umount /dev/mmcblk0p1 2>/dev/null; "
+                         "  mkfs.vfat -F 32 /dev/mmcblk0p1 > /tmp/sdformat_report.txt 2>&1; "
+                         "  echo \"RC=$?\" >> /tmp/sdformat_report.txt; "
+                         "  mount -t vfat /dev/mmcblk0p1 /mnt/mmcblk0p1 >> /tmp/sdformat_report.txt 2>&1; "
+                         "  echo \"MOUNT_RC=$?\" >> /tmp/sdformat_report.txt; "
+                         "  rm -f /tmp/sdformat_running ) >/dev/null 2>&1 &");
+                system(cmd);
+                sendto(sock, "SDFORMAT_STARTED", 16, 0,
+                       (struct sockaddr *)&client_addr, addr_len);
+                printf("[SDFORMAT] started in background\n");
+            }
+        }
+        else if (strcmp(buffer, "SDFORMATSTATUS") == 0)
+        {
+            if (access("/tmp/sdformat_running", F_OK) == 0) {
+                sendto(sock, "SDFORMAT_RUNNING", 16, 0,
+                       (struct sockaddr *)&client_addr, addr_len);
+            } else {
+                FILE *f = fopen("/tmp/sdformat_report.txt", "r");
+                if (!f) {
+                    sendto(sock, "SDFORMAT_NOREPORT", 17, 0,
+                           (struct sockaddr *)&client_addr, addr_len);
+                } else {
+                    char rep[2048];
+                    size_t n = fread(rep, 1, sizeof(rep) - 1, f);
+                    fclose(f);
+                    rep[n] = '\0';
+                    if (n == 0)
+                        sendto(sock, "SDFORMAT_NOREPORT", 17, 0,
+                               (struct sockaddr *)&client_addr, addr_len);
+                    else
+                        sendto(sock, rep, n, 0,
+                               (struct sockaddr *)&client_addr, addr_len);
+                }
+            }
+        }
     }
     close(sock);
     return 0;
