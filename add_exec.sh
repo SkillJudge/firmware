@@ -28,7 +28,6 @@ general/overlay/root/encoder/start_encoder.sh
 
 general/overlay/etc/init.d/S01syslogd
 general/overlay/etc/init.d/S15_i2c_init
-general/overlay/etc/init.d/S29debugfs
 general/overlay/etc/init.d/S30customizer
 general/overlay/etc/init.d/S35modules
 general/overlay/etc/init.d/S38mdev
@@ -37,9 +36,7 @@ general/overlay/etc/init.d/S49ntpd
 general/overlay/etc/init.d/S50dropbear
 general/overlay/etc/init.d/S60crond
 general/overlay/etc/init.d/S70vendor
-general/overlay/etc/init.d/S98wireguard
 general/overlay/etc/init.d/S99ircut_day
-general/overlay/etc/init.d/S99rc.local
 
 general/overlay/etc/network/if-pre-up.d/bridge
 general/overlay/lib/mdev/automount.sh
