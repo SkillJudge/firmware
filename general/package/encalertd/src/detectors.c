@@ -129,6 +129,14 @@ static long sd_free_mb(void)
 
 /* ---------- 1a. SD 卡缺失 (4001)：确认前先自动重挂一次 ---------- */
 
+/* 块设备节点是否存在。区分两种缺失（2026-09-08 126 板事故：
+ * /dev/mmcblk0p1 整个节点不存在 = 内核未识别到卡/硬件层面掉线，
+ * 与"节点在但 vfat/ext4 挂载失败"的处置方向不同）。 */
+static bool sd_blockdev_present(void)
+{
+	return access("/dev/mmcblk0p1", F_OK) == 0;
+}
+
 static const char *det_sd_missing(const enc_cfg_t *c,
 				  char *reason, size_t rsz)
 {
@@ -140,7 +148,13 @@ static const char *det_sd_missing(const enc_cfg_t *c,
 		log_msg(ENC_LOG_INFO, "sd remount action succeeded");
 		return NULL;
 	}
-	snprintf(reason, rsz, "not_mounted");
+	if (sd_blockdev_present())
+		snprintf(reason, rsz,
+			 "mount_failed (dev /dev/mmcblk0p1 present)");
+	else
+		snprintf(reason, rsz,
+			 "no_block_device (/dev/mmcblk0p1 absent, "
+			 "card not detected by kernel)");
 	return reason;
 }
 

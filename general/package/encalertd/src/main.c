@@ -49,7 +49,7 @@ static void build_fail_detail(char *buf, size_t sz,
 	snprintf(buf, sz,
 		 "{\"detector\":\"%s\",\"streak\":%u,\"confirmAt\":%u,"
 		 "\"reason\":\"%s\"}",
-		 esc_n, (unsigned)(d->fail_streak + 1),
+		 esc_n, (unsigned)d->fail_streak,
 		 (unsigned)d->confirm_cnt, esc_r);
 }
 
@@ -154,6 +154,35 @@ static void fire_recovered(det_t *d)
 	log_msg(ENC_LOG_INFO, "RECOVERED %d %s", a->code, a->type);
 }
 
+/* 持续故障周期重报警（2026-09-08 126 板"全程无 SD 报警"事故对策）：
+ * 检测器 latch 后，故障不恢复则首发之后永远不再告警——首发那一条若被
+ * 跨 boot 陈旧 dedup 静默、或断网期落盘后补发链路异常，平台侧整个
+ * 生命周期都收不到该故障。这里对持续 failing 的检测器周期性重发告警，
+ * 节奏由 alert_raise() 内 dedup 窗口节流（默认 600s 一条，断网期同样
+ * 节流，不刷 spool）。
+ * 关键：只重发消息，绝不重复 on_confirmed 回调
+ * （低电关机 / 进程重启风暴 reboot / majestic HUP 只能触发一次）。 */
+static void reassert_confirmed_fail(det_t *d, const char *reason)
+{
+	alert_def_t *a = &d->alert_fail;
+	char desc[460];
+	char detail[512];
+	int rc;
+
+	if (!a->code)                 /* 事件型检测器无 fail 告警码 */
+		return;
+	if (strstr(a->desc_fmt, "%s"))
+		snprintf(desc, sizeof(desc), a->desc_fmt, reason ? reason : "");
+	else
+		snprintf(desc, sizeof(desc), "%s", a->desc_fmt);
+	build_fail_detail(detail, sizeof(detail), d, reason);
+	rc = alert_raise(&g_cfg, a->code, a->type, a->level, desc, detail);
+	if (rc == 0)
+		log_msg(ENC_LOG_INFO, "RE-ALERT %d %s (still failing): %s",
+			a->code, a->type, desc);
+	/* rc==2：dedup 窗口内节流跳过；其他 rc 已在流水线里记录，不刷日志 */
+}
+
 /* MQTT 连续失败 ≥4 次且未恢复 → 合成 1101（带失败分类，5 分钟节流） */
 static void check_broker_1101(void)
 {
@@ -246,6 +275,10 @@ static int run_loop(void)
 				    d->fail_streak >= d->confirm_cnt) {
 					d->failing = true;
 					fire_confirmed_fail(d, r);
+				} else if (d->failing) {
+					/* 故障持续：周期重报警（dedup 节流，
+					 * 不重复 on_confirmed 联动动作） */
+					reassert_confirmed_fail(d, r);
 				}
 			} else {
 				d->ok_streak++;
