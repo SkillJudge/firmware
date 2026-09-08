@@ -128,11 +128,16 @@ else
     echo "   ⚠ extutils 不存在，跳过符号链接创建"
 fi
 
-# 步骤 4: 调用 make BOARD=my clean all 编译（已在顶层目录）
-echo "--> 步骤 4: 开始全量清洗并编译板型 [my] ..."
-
-# 执行终极编译
-make BOARD=my clean all
+# 步骤 4: 调用 make BOARD=my 编译（已在顶层目录）
+# 默认增量编译（不 clean），避免每次都重编内核。
+# 如需全量重编，运行: ./build.sh clean
+if [ "$1" = "clean" ]; then
+    echo "--> 步骤 4: 全量清洗并编译板型 [my] (clean all) ..."
+    make BOARD=my clean all
+else
+    echo "--> 步骤 4: 增量编译板型 [my] (all) ..."
+    make BOARD=my all
+fi
 
 # 编译结束后，将版本号嵌入固件文件名
 # 命名规则：真实扩展名(.tgz/.bin/.tar/.cpio/.img)保留在末尾，

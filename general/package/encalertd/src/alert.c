@@ -189,8 +189,39 @@ int alert_init(const enc_cfg_t *c)
 		 "%s/msgid", c->spool_dir);
 
 	mkdir_p(c->spool_dir);
-	mkdir_p(g_al.dir_spool);
 	mkdir_p(g_al.dir_dedup);
+	mkdir_p(g_al.dir_spool);
+
+	/* 启动时清空全部 dedup 标记（2026-09-08 126 板"全程无 SD 报警"
+	 * 事故根因）：dedup 是"同一 boot 内"的去重节流，标记持久在
+	 * spool_dir(dedup/) 里跨 boot 存活。若上一 boot 故障告警的时间戳
+	 * 落在去重窗内（重启周期 < dedup_sec，现场非常常见），本 boot
+	 * 首发的同码告警会被 dedup_active() 静默 return 2——不发不落盘；
+	 * 而检测器 latch 后又只告警一次，整个生命周期该故障再不上报。
+	 * spool/ 保留不动：滞留消息跨 boot 仍需补发。seq/msgid 保留。 */
+	{
+		DIR *dd = opendir(g_al.dir_dedup);
+
+		if (dd) {
+			struct dirent *de;
+			int cleared = 0;
+
+			while ((de = readdir(dd))) {
+				char p[384];
+
+				if (de->d_name[0] == '.')
+					continue;
+				snprintf(p, sizeof(p), "%s/%s",
+					 g_al.dir_dedup, de->d_name);
+				if (unlink(p) == 0)
+					cleared++;
+			}
+			closedir(dd);
+			log_msg(ENC_LOG_INFO,
+				"cleared %d stale dedup mark(s) at startup",
+				cleared);
+		}
+	}
 
 	read_u32_file(g_al.path_seq, &g_al.seq);
 	log_msg(ENC_LOG_INFO, "alert pipeline ready: spool=%s seq=%u",
