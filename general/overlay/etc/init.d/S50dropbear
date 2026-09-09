@@ -7,6 +7,14 @@ DAEMON_ARGS="-R -B -k -p 22 -K 300"
 start() {
 	echo -n "Starting $DAEMON: "
 	umask 077
+	# 开机预生成 ed25519 host key：dropbear -R 为"懒生成"，密钥在首个 SSH
+	# 连接到达时才落盘；若开机后长时间无人连接，hw_probe/encalertd 会持续
+	# 误报 host key 文件不存在（250.116/125/126 升级后实测）。
+	# dropbearkey 支持 ed25519（板端实测可用），检测器也检查该文件。
+	if [ ! -s /etc/dropbear/dropbear_ed25519_host_key ]; then
+		dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key \
+			>/dev/null 2>&1
+	fi
 	start-stop-daemon -S -q -p "$PIDFILE" -x "$DAEMON" -- $DAEMON_ARGS
 	if [ $? -eq 0 ]; then
 		echo "OK"
