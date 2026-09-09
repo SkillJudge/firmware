@@ -269,6 +269,8 @@ static void build_payload(char *out, size_t osz,
 
 	if (!detail_json || !detail_json[0])
 		detail_json = "{}";
+	if (!desc)
+		desc = "";
 
 	json_escape(esc_desc, sizeof(esc_desc), desc);
 	snprintf(out, osz,
@@ -335,7 +337,7 @@ static int drop_oldest_spool_file(void)
 	DIR *d = opendir(g_al.dir_spool);
 	struct dirent *e;
 	uint32_t oldest = UINT32_MAX;
-	char pick[128] = {0};
+	char pick[256] = {0};
 
 	if (!d)
 		return -1;
@@ -465,7 +467,7 @@ int alert_raise(const enc_cfg_t *c, int code, const char *type,
 
 struct seq_entry {
 	uint32_t seq;
-	char     name[64];
+	char     name[256];
 };
 
 static int cmp_seq_entry(const struct seq_entry *a,
