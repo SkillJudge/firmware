@@ -7,4 +7,9 @@ general/package/factoryinit/src/ipc_server
 .gitignore
 general/overlay/usr/bin/ircut_demo
 general/overlay/usr/bin/led_test.sh
+general/overlay/usr/sbin/check_mac
+general/overlay/usr/sbin/cli
+general/overlay/usr/sbin/netip_hash
+general/overlay/usr/sbin/sysinfo
+general/package/encalertd/src/encalertd
 

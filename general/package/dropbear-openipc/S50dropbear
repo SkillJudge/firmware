@@ -29,6 +29,17 @@ start() {
 	printf "Starting dropbear sshd: "
 	umask 077
 
+	# 开机主动预生成 ed25519 host key：dropbear -R 为“懒生成”，密钥在首个
+	# SSH 连接到达时才落盘；若开机后长时间无连接，/etc/dropbear 下一直无 key，
+	# encalertd ssh_avail(6105) 会持续误报 host_key missing（250.116 实测：
+	# 开机 20 小时无连接，误报持续到首次连入生成 key 才自愈）。
+	# 这里在 dropbear 启动前显式预生成，确保 key 开机即存在。
+	# 平台 dropbear/dropbearkey 均支持 ed25519（实测），检测器也检测该文件。
+	if [ ! -s /etc/dropbear/dropbear_ed25519_host_key ]; then
+		dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key \
+			>/dev/null 2>&1
+	fi
+
 	start-stop-daemon -S -q -p /var/run/dropbear.pid \
 		--exec /usr/sbin/dropbear -- $DROPBEAR_ARGS
 	[ $? = 0 ] && echo "OK" || echo "FAIL"

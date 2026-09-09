@@ -2,6 +2,19 @@
 # OpenIPC.org | 2025
 scr_version=1.0.49
 
+# ======= 关键：把自身复制到 /tmp 并 re-exec =======
+# flashcp 覆盖 rootfs 后，脚本后续行需要从 rootfs 读取，
+# 但 squashfs 元数据(旧)与 flash 数据(新)不匹配会导致 I/O error。
+# 把脚本放到 /tmp (tmpfs) 执行，确保刷机后还能继续跑到 reboot_system。
+_SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+if [ "${_SELF#/tmp/}" = "$_SELF" ]; then
+	cp -f "$_SELF" /tmp/.sysupgrade_ram 2>/dev/null
+	if [ -f /tmp/.sysupgrade_ram ]; then
+		chmod +x /tmp/.sysupgrade_ram
+		exec /tmp/.sysupgrade_ram "$@"
+	fi
+fi
+
 args="$@"
 LOCK_FILE=/tmp/sysupgrade.lock
 
@@ -108,6 +121,14 @@ free_resources() {
 
 	sync
 	echo 3 > /proc/sys/vm/drop_caches
+	# 预加载刷机后仍需执行的二进制到页缓存。
+	# flashcp 覆盖 rootfs 后，squashfs 元数据(旧)与 flash 数据(新)不匹配，
+	# 此时从 rootfs 加载任何二进制都会偶发 I/O error。
+	# 下面把 flash_eraseall（do_wipe_overlay 用）和 busybox（reboot_system 兜底用）
+	# 在 drop_caches 之后、flashcp 之前读入页缓存，确保刷机后还能跑。
+	for bin in /usr/sbin/flash_eraseall /bin/busybox /bin/sync; do
+		[ -f "$bin" ] && cat "$bin" >/dev/null 2>&1
+	done
 	echo_c 34 "\nUptime:"
 	uptime
 	echo_c 34 "\nMemory:"

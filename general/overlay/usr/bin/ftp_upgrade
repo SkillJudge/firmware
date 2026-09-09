@@ -5,6 +5,20 @@ CLIENT_IP="$2"
 LOCAL_PATH="/tmp/firmware"
 FIRMWARE_FILE="$LOCAL_PATH/rootfs.squashfs.gk7205v300"
 
+# ======= 关键：把自身复制到 /tmp 并 re-exec =======
+# flashcp 覆盖 rootfs 后，flash 上是新数据但 squashfs 元数据还是旧的，
+# 此时从 rootfs 读取任何二进制（sleep/reboot/甚至脚本自身后续行）都会
+# 因元数据与数据不匹配而 I/O 报错。把脚本放到 /tmp (tmpfs) 执行，
+# 确保刷机后脚本还能继续跑到 sysrq 重启。
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+if [ "${SELF#/tmp/}" = "$SELF" ]; then
+    cp -f "$SELF" /tmp/.ftp_upgrade_ram 2>/dev/null
+    if [ -f /tmp/.ftp_upgrade_ram ]; then
+        chmod +x /tmp/.ftp_upgrade_ram
+        exec /tmp/.ftp_upgrade_ram "$@"
+    fi
+fi
+
 # ======= 失败回包函数 =======
 # 所有"未刷机就退出"的出口都必须调用 send_fail，
 # 把 UPGRADE_FAIL=<reason> 通过 UDP 回传给 C# 客户端，
@@ -74,9 +88,12 @@ if [ $SYS_RET -eq 0 ] || [ $SYS_RET -eq 1 ]; then
     echo " 💾 刷写耗时: $FLASH_DURATION 秒"
     echo " ⏱️  总共耗时: $TOTAL_DURATION 秒"
     echo "=========================================================="
-    echo "=== [DEBUG] Rebooting in 5 seconds... ==="
-    sleep 5
-    reboot
+    echo "=== [DEBUG] Triggering reboot via sysrq... ==="
+    # 必须用 sysrq-trigger 重启：rootfs 已被 flashcp 覆盖，
+    # busybox reboot / sleep 等二进制无法从 rootfs 加载，
+    # 只有内核 sysrq 不依赖任何 flash 读取。
+    sync
+    echo b > /proc/sysrq-trigger
 else
     # sysupgrade 执行失败：未刷机（或刷机未完成），回包失败
     send_fail "SYSUPGRADE_FAIL:ret=$SYS_RET"

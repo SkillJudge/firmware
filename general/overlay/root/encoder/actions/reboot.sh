@@ -7,6 +7,9 @@
 # 输出: {"rebooted":1}
 # =============================================================
 sync
-reboot -f
+# 优先 busybox reboot；若 rootfs 正处于升级后不一致状态
+# （flashcp 已覆盖但未重启），busybox 可能读失败，
+# 用 sysrq-trigger 直接让内核重启，不依赖任何 flash 读取。
+reboot -f 2>/dev/null || echo b > /proc/sysrq-trigger
 printf '{"rebooted":1}'
 exit 0

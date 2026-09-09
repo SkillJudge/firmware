@@ -1,0 +1,118 @@
+#!/bin/sh
+# =====================================================================
+# sd_upgrade —— 从 SD 卡上的 rootfs 文件升级固件
+#
+# 用法:
+#   sd_upgrade                     # 自动查找 SD 卡上的 rootfs.squashfs.*
+#   sd_upgrade /mnt/mmcblk0p1/xxx  # 指定 rootfs 文件路径
+#   sd_upgrade -n                  # 不重启（用于调试，查看刷机后状态）
+#   sd_upgrade -k                  # 同时升级 kernel（需 SD 卡上有 uImage.*）
+#
+# 流程:
+#   1. 定位 SD 卡挂载点 (/mnt/mmcblk0p1)
+#   2. 查找 rootfs.squashfs.<soc> 文件
+#   3. 校验文件大小 (7MB ~ 9MB)
+#   4. 调用 sysupgrade --rootfs=<file> -f -n -z 刷写并重启
+#   5. 若 sysupgrade 未重启(如 -n 模式)，用 sysrq-trigger 兜底重启
+# =====================================================================
+
+SD_MOUNT="/mnt/mmcblk0p1"
+NO_REBOOT=0
+WITH_KERNEL=0
+
+# ---- 参数解析 ----
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -n|--no-reboot) NO_REBOOT=1; shift ;;
+        -k|--kernel)    WITH_KERNEL=1; shift ;;
+        -h|--help)
+            sed -n '2,15p' "$0"
+            exit 0
+            ;;
+        /*)
+            # 绝对路径：当作指定的 rootfs 文件
+            ROOTFS_ARG="$1"; shift ;;
+        *)
+            echo "Unknown option: $1" >&2
+            exit 2
+            ;;
+    esac
+done
+
+echo_c() { echo -e "\033[1;$1m$2\033[0m"; }
+
+# ---- 定位 SD 卡 ----
+if ! mount | grep -q "on ${SD_MOUNT} "; then
+    echo_c 31 "SD card not mounted at ${SD_MOUNT}"
+    echo "  Try: mount /dev/mmcblk0p1 ${SD_MOUNT}"
+    exit 1
+fi
+echo_c 32 "SD card mounted at ${SD_MOUNT}"
+
+# ---- 定位 rootfs 文件 ----
+if [ -n "$ROOTFS_ARG" ]; then
+    ROOTFS_FILE="$ROOTFS_ARG"
+else
+    # 自动查找：优先匹配 rootfs.squashfs.*，取最新的一个
+    ROOTFS_FILE=$(ls -t "${SD_MOUNT}"/rootfs.squashfs.* 2>/dev/null | head -1)
+fi
+
+if [ -z "$ROOTFS_FILE" ] || [ ! -f "$ROOTFS_FILE" ]; then
+    echo_c 31 "rootfs file not found on SD card"
+    echo "  Put rootfs.squashfs.gk7205v300 (or similar) on ${SD_MOUNT}/"
+    exit 1
+fi
+echo_c 32 "Using rootfs: ${ROOTFS_FILE}"
+
+# ---- 校验大小 ----
+SIZE=$(stat -c "%s" "$ROOTFS_FILE" 2>/dev/null || echo 0)
+MIN=$((7*1024*1024))
+MAX=$((9*1024*1024))
+if [ "$SIZE" -lt "$MIN" ] || [ "$SIZE" -gt "$MAX" ]; then
+    echo_c 31 "rootfs size ${SIZE} out of range [${MIN}, ${MAX}]"
+    exit 1
+fi
+echo_c 32 "Size check passed: $((SIZE/1024)) KB"
+
+# ---- 定位 kernel 文件（可选）----
+KERNEL_ARGS=""
+if [ "$WITH_KERNEL" = "1" ]; then
+    KERNEL_FILE=$(ls -t "${SD_MOUNT}"/uImage.* 2>/dev/null | head -1)
+    if [ -n "$KERNEL_FILE" ] && [ -f "$KERNEL_FILE" ]; then
+        KERNEL_ARGS="--kernel=${KERNEL_FILE}"
+        echo_c 32 "Using kernel: ${KERNEL_FILE}"
+    else
+        echo_c 33 "No uImage.* found on SD card, skipping kernel update"
+    fi
+fi
+
+# ---- 关键：把自身复制到 /tmp，确保刷机后脚本能继续运行 ----
+SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
+if [ "${SELF#/tmp/}" = "$SELF" ]; then
+    cp -f "$SELF" /tmp/.sd_upgrade_ram 2>/dev/null
+    if [ -f /tmp/.sd_upgrade_ram ]; then
+        chmod +x /tmp/.sd_upgrade_ram
+        exec /tmp/.sd_upgrade_ram "$@"
+    fi
+fi
+
+# ---- 执行升级 ----
+echo_c 33 "\nStarting sysupgrade..."
+if [ "$NO_REBOOT" = "1" ]; then
+    # 调试模式：不重启，刷机后保留现场供排查
+    sysupgrade --rootfs="$ROOTFS_FILE" $KERNEL_ARGS -f -n -z -x
+    RET=$?
+    echo_c 33 "\nsysupgrade exit code: $RET"
+    echo_c 33 "No-reboot mode. Inspect state, then run: echo b > /proc/sysrq-trigger"
+    exit $RET
+else
+    # 正常模式：sysupgrade 内部会用 sysrq 兜底重启
+    sysupgrade --rootfs="$ROOTFS_FILE" $KERNEL_ARGS -f -n -z
+    RET=$?
+    # 若 sysupgrade 因某种原因未重启，兜底用 sysrq
+    echo_c 31 "sysupgrade returned without rebooting (code=$RET). Forcing reboot via sysrq..."
+    sync
+    echo b > /proc/sysrq-trigger
+fi
+
+exit 0
