@@ -168,7 +168,7 @@ else
 fi
 
 ETH_C=$(cat /sys/class/net/eth0/carrier 2>/dev/null)
-[ "$ETH_C" = "1" ] && check "eth_link" "OK" "carrier=1" || check "eth_link" "WARN" "carrier=${ETH_C:-0} (WiFi 场景未插线属正常)"
+[ "$ETH_C" = "1" ] && check "eth_link" "WARN" "carrier=1 (生产环境为 WiFi, 插网线属异常)" || check "eth_link" "OK" "carrier=${ETH_C:-0} (未插网线, 符合 WiFi 生产场景)"
 [ -e /sys/class/net/wlan0 ] && check "wlan_present" "OK" "wlan0" || check "wlan_present" "FAIL" "无 wlan0"
 
 GPIO_N=$(ls /dev/gpiochip* 2>/dev/null | wc -l)
