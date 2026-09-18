@@ -50,6 +50,7 @@ general/overlay/usr/bin/power_key_test
 general/overlay/usr/sbin/firstboot
 general/overlay/usr/sbin/gpio
 general/overlay/usr/sbin/hw_probe.sh
+general/overlay/usr/sbin/net_probe.sh
 general/overlay/usr/sbin/overlay_log_mgr.sh
 general/overlay/usr/sbin/pqtools
 general/overlay/usr/sbin/sysupgrade
