@@ -2,7 +2,54 @@
 # 确保脚本在遇到任何错误时立刻退出，防止错误扩大
 set -e
 
-git pull
+# ------------------------------------------------------------
+# 参数解析（可组合，顺序无关）：
+#   --reset / --force-sync  在 git pull 同一位置强制丢弃本地改动与
+#                           本地提交，执行 git fetch origin &&
+#                           git reset --hard origin/master，使工作区
+#                           与远端 master 完全一致。
+#                           注意：不删除未跟踪/被忽略文件（如 output/）。
+#   clean                   编译前对板型执行 make clean all
+# 例：
+#   ./build.sh                 # 普通 git pull + 增量编译
+#   ./build.sh --reset         # 强制对齐 origin/master + 增量编译
+#   ./build.sh --reset clean   # 强制对齐 origin/master + 全量编译
+# ------------------------------------------------------------
+FORCE_RESET=0
+DO_CLEAN=0
+for arg in "$@"; do
+    case "$arg" in
+        --reset|--force-sync)
+            FORCE_RESET=1
+            ;;
+        clean)
+            DO_CLEAN=1
+            ;;
+        -h|--help)
+            echo "用法: $0 [--reset|--force-sync] [clean]"
+            exit 0
+            ;;
+        *)
+            echo "❌ 未知参数: $arg"
+            echo "用法: $0 [--reset|--force-sync] [clean]"
+            exit 2
+            ;;
+    esac
+done
+
+# 同步源码：
+#   --reset 时先 fetch 最新远端引用，再强制对齐 origin/master，
+#   替代普通 git pull（对齐后 pull 仅为 Already up to date，故跳过）；
+#   不加参数时沿用 git pull，保留本地改动做 fast-forward 更新。
+if [ "$FORCE_RESET" = "1" ]; then
+    echo "=================================================="
+    echo "⚠️  --reset: 强制丢弃本地改动，对齐 origin/master"
+    echo "=================================================="
+    git fetch origin
+    git reset --hard origin/master
+else
+    git pull
+fi
 
 chmod +x ./add_exec.sh
 
@@ -130,8 +177,8 @@ fi
 
 # 步骤 4: 调用 make BOARD=my 编译（已在顶层目录）
 # 默认增量编译（不 clean），避免每次都重编内核。
-# 如需全量重编，运行: ./build.sh clean
-if [ "$1" = "clean" ]; then
+# 如需全量重编，加 clean 参数: ./build.sh clean（可与 --reset 组合）
+if [ "$DO_CLEAN" = "1" ]; then
     echo "--> 步骤 4: 全量清洗并编译板型 [my] (clean all) ..."
     make BOARD=my clean all
 else
