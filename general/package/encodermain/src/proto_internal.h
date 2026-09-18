@@ -53,6 +53,10 @@ void proto_key_sanitize(char *buf, size_t sz, const char *src);
 bool proto_stream_url_normalize(const char *requested, const char *fallback_url,
 				const char *device_id, char *out, size_t sz);
 
+/* 默认端口等价性：原地去除 rtmp URL 权威段中显式的默认端口 :1935，
+ * 使 rtmp://host:1935/... 与 rtmp://host/... 比较结果一致。 */
+void proto_url_strip_default_rtmp_port(char *url, size_t sz);
+
 /* data 对象字段追加（自动管理逗号；字符串带引号转义 / 数字原样） */
 void proto_data_put_str(sb_t *b, const char *key, const char *val);
 void proto_data_put_int(sb_t *b, const char *key, long long v);

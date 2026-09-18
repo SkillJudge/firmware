@@ -339,22 +339,22 @@ static bool url_with_stream_name(const char *url, const char *name,
 				if (*q) segs++;
 			}
 			if (segs >= 2 && strcmp(seg1, SRS_APP_DEFAULT_PROTO) == 0) {
-				char *cut = strrchr(base, '/');
+			char *cut = strrchr(base, '/');
 
-				if (cut) {
-					snprintf(out, sz, "%.*s/%s",
-						 (int)(cut - base), base, name);
-					ensure_srs_app_default_inplace(out, sz);
-					return true;
-				}
+			if (cut) {
+				snprintf(out, sz, "%.*s/%s",
+					 (int)(cut - base), base, name);
+				ensure_srs_app_default_inplace(out, sz);
+				return true;
 			}
-			(void)slashes;
 		}
+		(void)slashes;
 	}
-	/* 无 scheme 或 scheme 但段数不够/首段非 live：直接 append 后归一化 */
-	snprintf(out, sz, "%s/%s", base, name);
-	ensure_srs_app_default_inplace(out, sz);
-	return true;
+}
+/* 无 scheme 或 scheme 但段数不够/首段非 live：直接 append 后归一化 */
+snprintf(out, sz, "%s/%s", base, name);
+ensure_srs_app_default_inplace(out, sz);
+return true;
 }
 
 bool proto_stream_url_normalize(const char *requested, const char *fallback_url,
@@ -371,6 +371,55 @@ bool proto_stream_url_normalize(const char *requested, const char *fallback_url,
 	if (fallback_url && fallback_url[0])
 		return url_with_stream_name(fallback_url, name, out, sz);
 	return false;
+}
+
+/* ------------------------------------------------------------------ */
+/* 默认端口等价性：rtmp://host:1935/... 与 rtmp://host/... 视为同一 URL */
+/* ------------------------------------------------------------------ */
+
+void proto_url_strip_default_rtmp_port(char *url, size_t sz)
+{
+	char *scheme;
+	char *auth_start;
+	char *auth_end;
+	char *userinfo;
+	char *host_start;
+	char *colon;
+	char *p;
+
+	(void)sz;
+	if (!url)
+		return;
+	/* 仅处理 rtmp scheme */
+	if (strncmp(url, "rtmp://", 7) != 0)
+		return;
+	scheme = url + 7;
+	auth_start = scheme;
+	/* 权威段结束于第一个 '/','?','#' */
+	auth_end = scheme;
+	while (*auth_end && *auth_end != '/' &&
+	       *auth_end != '?' && *auth_end != '#')
+		auth_end++;
+	/* 跳过 userinfo（形如 user:pass@host），冒号只在 host 段内查找 */
+	userinfo = NULL;
+	for (p = auth_start; p < auth_end; p++) {
+		if (*p == '@')
+			userinfo = p;
+	}
+	host_start = userinfo ? userinfo + 1 : auth_start;
+	/* host 段内最后一个 ':' 即端口分隔符 */
+	colon = NULL;
+	for (p = host_start; p < auth_end; p++) {
+		if (*p == ':')
+			colon = p;
+	}
+	if (!colon)
+		return;
+	/* 端口必须严格为 "1935" */
+	if ((size_t)(auth_end - (colon + 1)) != 4 ||
+	    strncmp(colon + 1, "1935", 4) != 0)
+		return;
+	memmove(colon, auth_end, strlen(auth_end) + 1);
 }
 
 /* ------------------------------------------------------------------ */

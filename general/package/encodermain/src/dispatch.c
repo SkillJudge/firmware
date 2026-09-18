@@ -566,14 +566,19 @@ static bool state_special_case(const cmd_t *cmd, proto_cmd_t cc,
 		if (!state_get_str("current_stream_url", cur_url,
 				   sizeof(cur_url)))
 			return false;
+		/* 已存 URL 可能带显式默认端口 :1935，剥离后再比较 */
+		proto_url_strip_default_rtmp_port(cur_url, sizeof(cur_url));
 		{
 			char norm[300];
 			sb_t e;
 
 			if (!proto_stream_url_normalize(cmd->stream_url, NULL,
 							cmd->device_id, norm,
-							sizeof(norm)) ||
-			    strcmp(norm, cur_url) != 0)
+							sizeof(norm)))
+				return false;
+			/* 请求/存量两侧统一剥离显式默认端口 :1935 后再比较 */
+			proto_url_strip_default_rtmp_port(norm, sizeof(norm));
+			if (strcmp(norm, cur_url) != 0)
 				return false;
 			sb_init(&e);
 			proto_data_put_str(&e, "streamUrl", norm);

@@ -796,7 +796,16 @@ static bool tcp_established_to_port(int port)
 		char rem[80];
 		unsigned st;
 
-		if (sscanf(line, "%*x:%*x %79s %x", rem, &st) != 2)
+		/*
+		 * /proc/net/tcp 行格式：
+		 *   sl local_address rem_address st ...
+		 *   3: 7EFAA8C0:D2DC 64FAA8C0:078F 01 ...
+		 * 依次为 sl(十进制): 本地IP:本地端口 远端IP:远端端口 状态(01=ESTABLISHED)。
+		 * 注意旧格式串 "%*x:%*x %79s %x" 实际把 rem 解析成 ":本地端口"、
+		 * 把 st 解析成远端 IP，导致永远判不出 ESTABLISHED（误报
+		 * no_established_to_1935），2026-09-18 修正。
+		 */
+		if (sscanf(line, "%*d:%*x:%*x %79s %x", rem, &st) != 2)
 			continue;
 		if (st != 0x01)
 			continue;

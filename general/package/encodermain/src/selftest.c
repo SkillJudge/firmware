@@ -276,6 +276,30 @@ static void ut_url_normalize(void)
 			     "returned false (fallback not applied)");
 }
 
+/* T1.8b 默认端口等价性：显式 :1935 必须被剥离；非默认端口保留 */
+static void ut_strip_default_port(void)
+{
+	char out[512];
+
+	snprintf(out, sizeof(out),
+		 "rtmp://192.168.250.100:1935/live/stream_X");
+	proto_url_strip_default_rtmp_port(out, sizeof(out));
+	ut_expect_streq("T1.8b_strip_default_1935",
+			"rtmp://192.168.250.100/live/stream_X", out);
+
+	snprintf(out, sizeof(out),
+		 "rtmp://192.168.250.100:1936/live/stream_X");
+	proto_url_strip_default_rtmp_port(out, sizeof(out));
+	ut_expect_streq("T1.8b_keep_nondefault_port",
+			"rtmp://192.168.250.100:1936/live/stream_X", out);
+
+	snprintf(out, sizeof(out),
+		 "rtmp://user:1935@192.168.250.100/live/stream_X");
+	proto_url_strip_default_rtmp_port(out, sizeof(out));
+	ut_expect_streq("T1.8b_keep_userinfo_colon",
+			"rtmp://user:1935@192.168.250.100/live/stream_X", out);
+}
+
 /* T1.9 dedup key 对账：task_dedup_key 生成 vs dedup_remove_pair 查表生成，
  *      两者必须逐字节一致。用 STREAM_START 最关键的 case（原 bug 出处）。
  *   —— dispatch.c:444 task_dedup_key 生成:
@@ -355,6 +379,7 @@ static void ut_string_group(void)
 	printf("===== [UNITEST T1] 字符串拼接 / URL 归一化 / Dedup Key =====\n");
 	ut_key_sanitize();
 	ut_url_normalize();
+	ut_strip_default_port();
 	ut_dedup_key_pair_match();
 	ut_proto_cmd_name_dump();
 }

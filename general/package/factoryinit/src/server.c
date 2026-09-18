@@ -349,6 +349,59 @@ int main() {
                 }
             }
         }
+        else if (strcmp(buffer, "NETTEST") == 0 || strncmp(buffer, "NETTEST=", 8) == 0)
+        {
+            // WiFi 网络质量测试：后台跑 /usr/sbin/net_probe.sh，
+            // 报告落 /tmp/nettest_report.txt。异步执行，结果用 NETTESTSTATUS 查询。
+            // 指令格式: NETTEST                (仅 ping + RSSI)
+            //           NETTEST=<ftp_server_ip> (额外测 FTP 上传吞吐)
+            char cmd[384];
+            const char *ftp_ip = "";
+            if (buffer[7] == '=') ftp_ip = buffer + 8;
+
+            if (access("/tmp/nettest_running", F_OK) == 0) {
+                sendto(sock, "NETTEST_BUSY", 12, 0,
+                       (struct sockaddr *)&client_addr, addr_len);
+                printf("[NETTEST] busy, previous test still running\n");
+            } else {
+                unlink("/tmp/nettest_report.txt");
+                FILE *f = fopen("/tmp/nettest_running", "w");
+                if (f) fclose(f);
+                snprintf(cmd, sizeof(cmd),
+                         "( /bin/sh /usr/sbin/net_probe.sh 192.168.250.100 %s "
+                         "> /tmp/nettest_report.txt 2>&1; "
+                         "rm -f /tmp/nettest_running ) >/dev/null 2>&1 &",
+                         ftp_ip);
+                system(cmd);
+                sendto(sock, "NETTEST_STARTED", 15, 0,
+                       (struct sockaddr *)&client_addr, addr_len);
+                printf("[NETTEST] started in background (ftp_ip=%s)\n", ftp_ip);
+            }
+        }
+        else if (strcmp(buffer, "NETTESTSTATUS") == 0)
+        {
+            if (access("/tmp/nettest_running", F_OK) == 0) {
+                sendto(sock, "NETTEST_RUNNING", 15, 0,
+                       (struct sockaddr *)&client_addr, addr_len);
+            } else {
+                FILE *f = fopen("/tmp/nettest_report.txt", "r");
+                if (!f) {
+                    sendto(sock, "NETTEST_NOREPORT", 16, 0,
+                           (struct sockaddr *)&client_addr, addr_len);
+                } else {
+                    char rep[4096];
+                    size_t n = fread(rep, 1, sizeof(rep) - 1, f);
+                    fclose(f);
+                    rep[n] = '\0';
+                    if (n == 0)
+                        sendto(sock, "NETTEST_NOREPORT", 16, 0,
+                               (struct sockaddr *)&client_addr, addr_len);
+                    else
+                        sendto(sock, rep, n, 0,
+                               (struct sockaddr *)&client_addr, addr_len);
+                }
+            }
+        }
     }
     close(sock);
     return 0;

@@ -29,6 +29,7 @@
 #include <unistd.h>
 
 #include "common.h"
+#include "proto_internal.h"
 
 /* ---- config.sh 固定值（C 版 cfg 未包含，按固件默认硬编码） ---- */
 #define RECORD_FILE_TIME_FORMAT "%Y%m%d%H%M%S"
@@ -869,6 +870,8 @@ static int stream_start(const enc_cfg_t *c, const char *mode, const cmd_t *cmd,
 		result_ok(r, -1, "fail");
 		return -1;
 	}
+	/* 统一去掉显式默认端口 :1935，保证与存量 URL 比较等价 */
+	proto_url_strip_default_rtmp_port(push_url, sizeof(push_url));
 	/* RESULT_STREAM_URL / RESULT_TASK_ID（task_id 缺省回落 state 当前值） */
 	json_escape(esc, sizeof(esc), push_url);
 	extra_add(r, "\"streamUrl\":%s", esc);
@@ -884,6 +887,7 @@ static int stream_start(const enc_cfg_t *c, const char *mode, const cmd_t *cmd,
 	if (state_is("is_recording")) {
 		state_get_str("current_stream_url", active_url,
 			      sizeof(active_url));
+		proto_url_strip_default_rtmp_port(active_url, sizeof(active_url));
 		if (state_is("is_publishing") &&
 		    !strcmp(active_url, push_url)) {
 			/* 录像期间相同推流只返回当前结果：不刷新 duration、
@@ -909,6 +913,7 @@ static int stream_start(const enc_cfg_t *c, const char *mode, const cmd_t *cmd,
 		mode, push_url);
 
 	state_get_str("current_stream_url", active_url, sizeof(active_url));
+	proto_url_strip_default_rtmp_port(active_url, sizeof(active_url));
 	if (state_is("is_publishing") && !strcmp(active_url, push_url))
 		log_msg(ENCM_LOG_WARN,
 			"media: stream already running on requested url, "
@@ -1516,15 +1521,24 @@ int feat_duration_check(void)
 	time_t deadline;
 	int executed = 0;
 
+	expect_url[0] = '\0';
+	cur_url[0] = '\0';
+
 	pthread_mutex_lock(&g_biz_mutex);
 	deadline = g_dur_deadline;
 	if (deadline != 0 && time(NULL) >= deadline) {
 		snprintf(expect_url, sizeof(expect_url), "%s", g_dur_url);
 		snprintf(task_id, sizeof(task_id), "%s", g_dur_task);
+		proto_url_strip_default_rtmp_port(expect_url,
+						  sizeof(expect_url));
 		if (state_is("is_publishing") &&
 		    state_get_str("current_stream_url", cur_url,
-				  sizeof(cur_url)) &&
-		    !strcmp(cur_url, expect_url)) {
+				  sizeof(cur_url))) {
+			proto_url_strip_default_rtmp_port(cur_url,
+							  sizeof(cur_url));
+		}
+		if (state_is("is_publishing") &&
+		    strcmp(cur_url, expect_url) == 0) {
 			feat_result_t r;
 
 			log_msg(ENCM_LOG_WARN,
