@@ -8,7 +8,7 @@
  *     VCELL 0x02  12bit 电压：count = 交换值 >> 4，mV = (count*125+50)/100
  *     CRATE 0x16  有符号充放电速率，≥32768 减 65536
  *   充电引脚 PCF8574(0x20)：先读 → 写回 raw|0x07 释放 P0/P1/P2 → sleep 1s
- *   → 回读。CHRG=P0(0x01)/STDBY=P1(0x02) 低有效：
+ *   → 回读。CHRG=P1(0x02)/STDBY=P0(0x01) 低有效（原理图 v4）：
  *     chrg=0,stdby=1 → 充电；chrg=1 → 未充电；0:0 歧义 → 回退 CRATE
  *   CRATE 回退滞回：≥+5 → 充电，≤-5 → 放电，0 附近保持原值
  *   （低压关机已移交 encalertd，本模块不再做关机判定）
@@ -39,8 +39,10 @@
 #define BATTERY_CRATE_REG            0x16
 #define BATTERY_CHARGE_GPIO_I2C_BUS  1
 #define BATTERY_CHARGE_GPIO_I2C_ADDR 0x20
-#define BATTERY_CHRG_GPIO_MASK       0x01
-#define BATTERY_STDBY_GPIO_MASK      0x02
+/* 引脚映射按原理图 v4：P0=STDBY, P1=CHRG（旧版底板 P0/P1 对调，
+ * 2026-09-18 跟原理图核对后修正） */
+#define BATTERY_CHRG_GPIO_MASK       0x02
+#define BATTERY_STDBY_GPIO_MASK      0x01
 #define BATTERY_PROTECT_GPIO_MASK    0x07
 #define BATTERY_CHARGING_THRESHOLD_RAW     5
 #define BATTERY_DISCHARGING_THRESHOLD_RAW  (-5)

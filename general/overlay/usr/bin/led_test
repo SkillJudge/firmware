@@ -4,8 +4,8 @@
 I2C_BUS=1
 I2C_ADDR=0x20
 
-# PCF8574引脚分配
-# P0:CHRG  P1:STDBY  P2:软关机(必须永久高电平)
+# PCF8574引脚分配（按原理图 v4：P0=STDBY, P1=CHRG）
+# P0:STDBY  P1:CHRG  P2:软关机(必须永久高电平)
 # P3:LED1  P4:LED2A  P5:LED2B
 LED1_MASK=$((1 << 3))
 LED2A_MASK=$((1 << 4))
@@ -69,8 +69,8 @@ all_led_on() {
 read_status() {
     local val=$(read_pcf8574)
     printf "PCF8574 寄存器值: 0x%02X\n" "$val"
-    echo "P0 CHRG:    $(( (val >> 0) & 1 ))"
-    echo "P1 STDBY:   $(( (val >> 1) & 1 ))"
+    echo "P0 STDBY:   $(( (val >> 0) & 1 ))"
+    echo "P1 CHRG:    $(( (val >> 1) & 1 ))"
     echo "P2 POWER:   $(( (val >> 2) & 1 ))"
     echo "P3 LED1:    $(( (val >> 3) & 1 ))"
     echo "P4 LED2A:   $(( (val >> 4) & 1 ))"

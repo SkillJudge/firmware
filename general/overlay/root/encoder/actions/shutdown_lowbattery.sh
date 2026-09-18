@@ -4,7 +4,7 @@
 #
 # 本机电源硬件（参考 /usr/bin/power_key_test、/usr/bin/led_test.sh）：
 #   PCF8574 @ I2C1/0x20：
-#     P0=CHRG(充)  P1=STDBY  P2=软关机引脚(必须常高，拉低>=2s 触发硬件断电)
+#     P0=STDBY  P1=CHRG(充)  P2=软关机引脚(必须常高，拉低>=2s 触发硬件断电)
 #     P3=LED1      P4=LED2A   P5=LED2B
 #   Linux `poweroff` 只能停系统，真正断电靠 P2 拉低触发关机电路。
 #
