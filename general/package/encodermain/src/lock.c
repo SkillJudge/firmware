@@ -91,9 +91,14 @@ int majestic_lock_acquire(int wait_sec)
 		}
 	}
 
-	log_msg(ENCM_LOG_ERROR,
-		"majestic config lock timeout wait_sec=%d dir=%s",
-		wait_sec, dir);
+	if (wait_sec > 0)
+		log_msg(ENCM_LOG_ERROR,
+			"majestic config lock timeout wait_sec=%d dir=%s",
+			wait_sec, dir);
+	else
+		log_msg(ENCM_LOG_DEBUG,
+			"majestic lock busy, nonblocking acquire skipped dir=%s",
+			dir);
 	pthread_mutex_unlock(&g_lock_mutex);
 	return -1;
 }

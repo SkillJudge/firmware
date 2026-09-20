@@ -155,11 +155,21 @@ static void majestic_recover(void)
 
 	if (proc_running("majestic"))
 		return;
-	log_msg(ENCM_LOG_WARN, "majestic not running, trying to start");
-	if (majestic_lock_acquire(g_app.cfg.majestic_lock_wait_sec) != 0) {
-		log_msg(ENCM_LOG_ERROR, "majestic recover: lock timeout");
+	/* stream_start/record_start/record_stop/reset 等业务流程会持配置锁
+	 * 有意 stop→restart majestic，期间进程短暂不存在属正常窗口。
+	 * 守护线程只做非阻塞抢锁：抢不到说明业务方正在接管 majestic 生命周期，
+	 * 本轮直接跳过，严禁并行拉起（更不能阻塞守护循环 60s）。 */
+	if (majestic_lock_acquire(0) != 0) {
+		log_msg(ENCM_LOG_DEBUG,
+			"majestic recover skipped: config lock busy");
 		return;
 	}
+	/* 获锁后复检：业务线程可能刚好已 restart 完成 */
+	if (proc_running("majestic")) {
+		majestic_lock_release();
+		return;
+	}
+	log_msg(ENCM_LOG_WARN, "majestic not running, trying to start");
 	snprintf(cmd, sizeof(cmd), "%s start", g_app.cfg.majestic_init);
 	if (run_cmd(cmd, 30, NULL, 0) != 0)
 		log_msg(ENCM_LOG_ERROR, "majestic start failed via %s",

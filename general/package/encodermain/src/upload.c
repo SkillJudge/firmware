@@ -61,6 +61,13 @@
 /* record_stop 最终分片同步上传进行中（抑制重传扫描并发同一文件） */
 static volatile bool g_final_syncing;
 
+/* 录像分片号分配/上传临界区：录像期扫描线程与 record_stop 最终分片
+ * （dispatch 线程）会并发上传同一 record 的文件。分片号必须在锁内
+ * "读 state segment_no → 预留 → 上传 → 推进" 原子完成，否则两路会
+ * 同取一个 segment_no（同名覆盖 FTP + DB upsert 丢片，2026-09-19
+ * 五方联调 R1/ENC_000003 实测：完整分钟片被尾片同号覆盖）。 */
+static pthread_mutex_t g_seg_mu = PTHREAD_MUTEX_INITIALIZER;
+
 /* 上传线程唤醒（cond：录像期 10s 周期 / 空闲期 30s 周期 / kick 即刻） */
 static pthread_mutex_t g_up_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  g_up_cond = PTHREAD_COND_INITIALIZER;
@@ -513,22 +520,76 @@ static int attempt_upload(const enc_cfg_t *c, const enc_runtime_t *rt,
 		return -1;	/* 上传前瞬间消失：交重传扫描转 lost */
 
 	if (is_record) {
-		state_get_int("segment_no", &seg_no);
-		seg = seg_no + 1;
+		/* 与 upload_sync_final 互斥：分片号在锁内预留/推进，
+		 * 上传也在锁内完成，杜绝扫描线程与最终片同号覆盖。 */
+		pthread_mutex_lock(&g_seg_mu);
+		if (row->seg > 0) {
+			/* 重试 / 账本已预留：沿用原号，远端名保持稳定 */
+			seg = row->seg;
+		} else {
+			state_get_int("segment_no", &seg_no);
+			seg = seg_no + 1;
+		}
 		build_record_output_name(c, seg, row->task_id,
 					 (long long)st.st_mtime, name,
 					 sizeof(name));
-		named_local_prepare(c, row->file, name, named, sizeof(named));
+		named_local_prepare(c, row->file, name, named,
+				    sizeof(named));
 		build_record_remote_path(c, row->record_id, name, rel,
 					 sizeof(rel));
 		row->seg = (int)seg;
 		log_msg(ENCM_LOG_DEBUG,
 			"segment upload attempt mode=%s record_id=%s local_file=%s named_file=%s remote_name=%s remote_path=%s",
 			mode, row->record_id, row->file, named, name, rel);
-	} else {
+
+		/* 先登记 pending（进程崩溃后由重传扫描接手），再上传 */
+		row->size = (long long)st.st_size;
+		row->mtime = (long long)st.st_mtime;
+		row->state = DB_PENDING;
+		row->next_retry_ts = 0;
+		row->err[0] = '\0';
+		row->ts = now_ms();
+		encdb_rec_add(row);
+
+		rc = upload_file(c, rt, named[0] ? named : row->file, rel);
+		if (rc == 0) {
+			long adv;
+
+			state_get_int("segment_no", &adv);
+			if (seg > adv)
+				state_set_int("segment_no", seg);
+			manifest_append(row->file);
+		}
+		pthread_mutex_unlock(&g_seg_mu);
+
+		if (rc == 0) {
+			row->state = DB_UPLOADED;
+			encdb_rec_add(row);
+			if (publish_event)
+				upload_publish_segment(mq, c, mode,
+						       row->task_id,
+						       row->record_id,
+						       name, row->size,
+						       (int)seg);
+			log_msg(ENCM_LOG_INFO,
+				"upload success kind=%s mode=%s record_id=%s segment_no=%ld remote_path=%s size=%lld",
+				row->kind, mode, row->record_id, seg, rel,
+				row->size);
+			return 0;
+		}
+		attempt_mark_failed(row, rc);
+		log_msg(ENCM_LOG_ERROR,
+			"upload failed kind=%s mode=%s record_id=%s local_file=%s remote_path=%s rc=%d retry=%d",
+			row->kind, mode, row->record_id, row->file, rel, rc,
+			row->retry + 1);
+		return -1;
+	}
+
+	{
 		snprintf(name, sizeof(name), "%s.jpg", row->record_id);
 		named[0] = '\0';
-		build_capture_remote_path(c, row->record_id, rel, sizeof(rel));
+		build_capture_remote_path(c, row->record_id, rel,
+					  sizeof(rel));
 	}
 
 	/* 先登记 pending（进程崩溃后由重传扫描接手），再上传 */
@@ -544,18 +605,9 @@ static int attempt_upload(const enc_cfg_t *c, const enc_runtime_t *rt,
 	if (rc == 0) {
 		row->state = DB_UPLOADED;
 		encdb_rec_add(row);
-		if (is_record) {
-			state_set_int("segment_no", seg);
-			manifest_append(row->file);
-			if (publish_event)
-				upload_publish_segment(mq, c, mode,
-						       row->task_id,
-						       row->record_id, name,
-						       row->size, (int)seg);
-		}
 		log_msg(ENCM_LOG_INFO,
-			"upload success kind=%s mode=%s record_id=%s segment_no=%ld remote_path=%s size=%lld",
-			row->kind, mode, row->record_id, seg, rel, row->size);
+			"upload success kind=%s mode=%s record_id=%s remote_path=%s size=%lld",
+			row->kind, mode, row->record_id, rel, row->size);
 		return 0;
 	}
 	attempt_mark_failed(row, rc);
@@ -895,8 +947,31 @@ int upload_sync_final(const enc_cfg_t *c, const enc_runtime_t *rt,
 		return 0;
 	}
 
-	state_get_int("segment_no", &seg_no);
-	seg = seg_no + 1;
+	/* 与 attempt_upload 同一把锁：等待在途分钟片传完后再取号，
+	 * 最终尾片永远排在最后一个分片之后，杜绝同号覆盖。 */
+	pthread_mutex_lock(&g_seg_mu);
+
+	/* 锁内复检：拿锁前扫描线程可能刚好把同文件传完 */
+	if (encdb_rec_get(local, &cur) && cur.state == DB_UPLOADED) {
+		build_record_output_name(c, cur.seg, task_id,
+					 (long long)st.st_mtime, name,
+					 sizeof(name));
+		snprintf(out_name, osz, "%s", name);
+		log_msg(ENCM_LOG_INFO,
+			"record stop final segment already uploaded by scanner (locked recheck) record_id=%s segment=%d remote_name=%s",
+			record_id, cur.seg, name);
+		pthread_mutex_unlock(&g_seg_mu);
+		g_final_syncing = false;
+		return 0;
+	}
+
+	if (cur.seg > 0) {
+		/* 扫描线程已为同文件预留过分片号（pending 在途）：沿用 */
+		seg = cur.seg;
+	} else {
+		state_get_int("segment_no", &seg_no);
+		seg = seg_no + 1;
+	}
 	build_record_output_name(c, seg, task_id, (long long)st.st_mtime,
 				 name, sizeof(name));
 	named_local_prepare(c, local, name, named, sizeof(named));
@@ -921,17 +996,23 @@ int upload_sync_final(const enc_cfg_t *c, const enc_runtime_t *rt,
 
 	rc = upload_file(c, rt, named, rel);
 	if (rc == 0) {
+		long adv;
+
 		row.state = DB_UPLOADED;
 		encdb_rec_add(&row);
-		state_set_int("segment_no", seg);
+		state_get_int("segment_no", &adv);
+		if (seg > adv)
+			state_set_int("segment_no", seg);
 		manifest_append(local);
 		snprintf(out_name, osz, "%s", name);
+		pthread_mutex_unlock(&g_seg_mu);
 		log_msg(ENCM_LOG_INFO,
 			"record stop final upload success record_id=%s segment_no=%ld remote_name=%s remote_path=%s size=%lld",
 			record_id, seg, name, rel, row.size);
 		g_final_syncing = false;
 		return 0;
 	}
+	pthread_mutex_unlock(&g_seg_mu);
 	attempt_mark_failed(&row, rc);
 	log_msg(ENCM_LOG_ERROR,
 		"record stop final upload failed record_id=%s local_file=%s rc=%d",
