@@ -2,17 +2,19 @@
  * main.c — encalertd 入口：参数解析、守护化、信号、调度主循环
  *
  * 用法：
- *   encalertd [-c conf] [-b] [-t] [-V]
+ *   encalertd [-c conf] [-b] [-t] [-V] [--version]
  *     -c  配置文件路径（默认 /etc/encalertd.conf）
  *     -b  后台守护化运行（init.d 启动用）
  *     -t  自检模式：全部检测器跑一轮打印结果后退出，不发 MQTT
  *     -V  调试日志
+ *     --version  打印版本号并退出
  *
  * 调度模型：单线程，每轮检查到期的检测器 → 刷新 spool 补发 → 有界睡眠。
  */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
+#include <getopt.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -313,15 +315,23 @@ int main(int argc, char **argv)
 	bool background = false, self_test = false;
 	int opt;
 
-	while ((opt = getopt(argc, argv, "c:btVh")) != -1) {
+	static const struct option longopts[] = {
+		{ "version", no_argument, NULL, 1000 },
+		{ NULL, 0, NULL, 0 }
+	};
+
+	while ((opt = getopt_long(argc, argv, "c:btVh", longopts, NULL)) != -1) {
 		switch (opt) {
 		case 'c': conf_path = optarg; break;
 		case 'b': background = true; break;
 		case 't': self_test = true; break;
 		case 'V': g_cfg.log_verbose = true; break;
+		case 1000:
+			printf("encalertd %s\n", ENC_VERSION);
+			return 0;
 		default:
 			fprintf(stderr,
-				"usage: encalertd [-c conf] [-b|-t] [-V]\n");
+				"usage: encalertd [-c conf] [-b|-t] [-V] [--version]\n");
 			return 2;
 		}
 	}

@@ -24,6 +24,9 @@
 #define ENC_SPOOL_DIR_DEFAULT   "/var/lib/encalertd"
 #define ENC_LOG_FILE_DEFAULT    "/tmp/encalertd.log"
 
+/* 版本号（语义化版本 MAJOR.MINOR.PATCH），每次修订同步更新 ../版本维护.md */
+#define ENC_VERSION             "1.0.0"
+
 typedef struct {
     /* 基础 */
     int         interval_sec;
